@@ -17,7 +17,6 @@
 
 #include "scene.h"
 
-
 using namespace SCN;
 
 //some globals
@@ -69,7 +68,7 @@ Renderer::Renderer(const char* shader_atlas_filename)
 	scene = nullptr;
 	skybox_cubemap = nullptr;
 
-   // 3.5: Reset per frame shadow containers
+   // 3.5: Reset per-frame shadow containers
 	shadow_viewprojections.clear();
 	shadow_biases.clear();
 
@@ -77,7 +76,7 @@ Renderer::Renderer(const char* shader_atlas_filename)
 		exit(1);
 	GFX::checkGLErrors();
 
-	// 3.1: Create depth shadow map FBOs  
+	// 3.1: Create depth shadow map FBOs
 	shadowmap_fbos.resize(MAX_SHADOW_LIGHTS);
 	for (int i = 0; i < MAX_SHADOW_LIGHTS; ++i)
 	{
@@ -97,7 +96,8 @@ void Renderer::setupScene()
 		skybox_cubemap = nullptr;
 }
 
-void Renderer::parseSceneEntities(SCN::Scene* scene, Camera* cam) {
+void Renderer::parseSceneEntities(SCN::Scene* scene, Camera* cam)
+{
 	// HERE =====================
 	// TODO: GENERATE RENDERABLES
 	// ==========================
@@ -126,7 +126,7 @@ void Renderer::renderScene(SCN::Scene* scene, Camera* camera)
 	this->scene = scene;
 	setupScene();
 
-	// 3.2.2: Generate shadow maps
+	// 3.2.2: Generate all theshadow maps
 	renderShadowMap(scene);
 	if (camera)
 		camera->enable();
@@ -166,7 +166,7 @@ void Renderer::renderScene(SCN::Scene* scene, Camera* camera)
 	for (size_t i = 0; i < render_calls.size(); ++i)
 		renderMeshWithMaterial(render_calls[i].model, render_calls[i].mesh, render_calls[i].material);
 }
-//new function to keep the code clean
+
 void Renderer::renderShadowMap(SCN::Scene* scene)
 {
     // 3.5: Reset shadow data each frame
@@ -196,7 +196,8 @@ void Renderer::renderShadowMap(SCN::Scene* scene)
 	if (shadow_lights.empty())
 		return;
 
-	GFX::Shader* shadow_shader = GFX::Shader::Get("texture");
+   // 3.2.2: Use simple shader for shadow-map generation
+	GFX::Shader* shadow_shader = GFX::Shader::Get("plain");
 	if (!shadow_shader)
 		return;
 
@@ -208,9 +209,10 @@ void Renderer::renderShadowMap(SCN::Scene* scene)
 		if (!light || !shadow_fbo)
 			continue;
 
-		// 3.2.1: Light camera (view)
-		vec3 light_pos = light->root.model.getTranslation();
-		vec3 light_dir = light->root.model.frontVector() * -1.0f;
+       // 3.2.1: Light camera (view)
+		Matrix44 light_model = light->root.getGlobalMatrix();
+		vec3 light_pos = light_model.getTranslation();
+		vec3 light_dir = light_model.rotateVector(vec3(0.0f, 0.0f, -1.0f));
 		if (light_dir.length() < 0.0001f)
 			light_dir = vec3(0, -1, 0);
 		light_dir.normalize();
@@ -229,7 +231,7 @@ void Renderer::renderShadowMap(SCN::Scene* scene)
 		}
 
 		shadow_viewprojections.push_back(shadow_camera.viewprojection_matrix);
-		shadow_biases.push_back(shadow_bias + light->shadow_bias);
+		shadow_biases.push_back(shadow_bias);
 
 		parseSceneEntities(scene, &shadow_camera);
 
@@ -246,8 +248,6 @@ void Renderer::renderShadowMap(SCN::Scene* scene)
 
 		shadow_shader->enable();
 		shadow_shader->setUniform("u_viewprojection", shadow_camera.viewprojection_matrix);
-		shadow_shader->setUniform("u_camera_position", shadow_camera.eye);
-		shadow_shader->setUniform("u_time", (float)getTime());
 
 		for (size_t i = 0; i < render_calls.size(); ++i)
 		{
@@ -257,8 +257,13 @@ void Renderer::renderShadowMap(SCN::Scene* scene)
 			if (call.material->alpha_mode == SCN::eAlphaMode::BLEND)
 				continue;
 
-			call.material->bind(shadow_shader);
+         GFX::Texture* shadow_texture = call.material->textures[SCN::eTextureChannel::ALBEDO].texture;
+			if (!shadow_texture)
+				shadow_texture = GFX::Texture::getWhiteTexture();
+
 			shadow_shader->setUniform("u_model", call.model);
+            shadow_shader->setUniform("u_texture", shadow_texture, 0);
+			shadow_shader->setUniform("u_alpha_cutoff", call.material->alpha_mode == SCN::eAlphaMode::MASK ? call.material->alpha_cutoff : 0.001f);
 			call.mesh->render(GL_TRIANGLES);
 		}
 
@@ -313,7 +318,7 @@ void Renderer::renderSkybox(GFX::Texture* cubemap)
 void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN::Material* material)
 {
 	//in case there is nothing to do
-	if (!mesh || !mesh->getNumVertices() || !material )
+	if (!mesh || !mesh->getNumVertices() || !material)
 		return;
 	assert(glGetError() == GL_NO_ERROR);
 
@@ -349,19 +354,19 @@ void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN
 		shader->setUniform("u_light_viewprojection", shadow_viewprojections);
 		shader->setUniform1Array("u_shadow_bias", &shadow_biases[0], (int)shadow_biases.size());
 
-		if (shadow_viewprojections.size() > 0) shader->setUniform("u_shadowmap0", shadowmap_fbos[0]->depth_texture, 7);
-		if (shadow_viewprojections.size() > 1) shader->setUniform("u_shadowmap1", shadowmap_fbos[1]->depth_texture, 8);
-		if (shadow_viewprojections.size() > 2) shader->setUniform("u_shadowmap2", shadowmap_fbos[2]->depth_texture, 9);
-		if (shadow_viewprojections.size() > 3) shader->setUniform("u_shadowmap3", shadowmap_fbos[3]->depth_texture, 10);
+		if (shadow_viewprojections.size() > 0) shader->setUniform("u_shadowmap0", shadowmap_fbos[0]->depth_texture, 2);
+		if (shadow_viewprojections.size() > 1) shader->setUniform("u_shadowmap1", shadowmap_fbos[1]->depth_texture, 3);
+		if (shadow_viewprojections.size() > 2) shader->setUniform("u_shadowmap2", shadowmap_fbos[2]->depth_texture, 4);
+		if (shadow_viewprojections.size() > 3) shader->setUniform("u_shadowmap3", shadowmap_fbos[3]->depth_texture, 5);
 	}
 
 	// Upload time, for cool shader effects
 	float t = getTime();
-	shader->setUniform("u_time", t );
+	shader->setUniform("u_time", t);
 
 	// Render just the verticies as a wireframe
 	if (render_wireframe)
-		glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
+		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
 	//do the draw call that renders the mesh into the screen
 	mesh->render(GL_TRIANGLES);
@@ -371,7 +376,7 @@ void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN
 
 	//set the render state as it was before to avoid problems with future renders
 	glDisable(GL_BLEND);
-	glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
 #ifndef SKIP_IMGUI
@@ -381,11 +386,12 @@ void Renderer::showUI()
 	ImGui::Checkbox("Wireframe", &render_wireframe);
 	ImGui::Checkbox("Boundaries", &render_boundaries);
 
-	//add here your stuff
-	//...
 	// 3.4 + 3.5: Global shadow controls
 	ImGui::DragFloat("Shadow Bias", &shadow_bias, 0.0001f, 0.0f, 0.1f);
 	ImGui::Checkbox("Front Face Culling (Shadow Pass)", &shadow_front_face_culling);
+
+	//add here your stuff
+	//...
 }
 
 #else

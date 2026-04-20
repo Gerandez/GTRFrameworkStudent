@@ -1,6 +1,7 @@
 //example of some shaders compiled
 flat basic.vs flat.fs
 texture basic.vs texture.fs
+plain basic.vs plain.fs
 skybox basic.vs skybox.fs
 depth quad.vs depth.fs
 multi basic.vs multi.fs
@@ -106,6 +107,25 @@ void main()
 }
 
 
+\plain.fs
+
+#version 330 core
+
+in vec2 v_uv;
+uniform sampler2D u_texture;
+uniform float u_alpha_cutoff;
+
+out vec4 FragColor;
+
+void main()
+{
+	vec4 color = texture(u_texture, v_uv);
+	if(color.a < u_alpha_cutoff)
+		discard;
+	FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+}
+
+
 \texture.fs
 
 #version 330 core
@@ -158,16 +178,16 @@ void main()
 	{
       for(int i = 0; i < u_shadow_count; ++i)
 		{
-          float light_visibility = 1.0;
-			vec4 light_pos = u_light_viewprojection[i] * vec4(v_world_position, 1.0);
-			light_pos.z -= u_shadow_bias[i] * light_pos.w;
-			vec3 light_ndc = light_pos.xyz / light_pos.w;
+         float light_visibility = 1.0;
+			vec4 proj_pos = u_light_viewprojection[i] * vec4(v_world_position, 1.0);
+			vec3 light_ndc = proj_pos.xyz / proj_pos.w;
 
 			if(light_ndc.x >= -1.0 && light_ndc.x <= 1.0 && light_ndc.y >= -1.0 && light_ndc.y <= 1.0 && light_ndc.z >= -1.0 && light_ndc.z <= 1.0)
 			{
+              float real_depth = (proj_pos.z - u_shadow_bias[i]) / proj_pos.w;
 				vec2 shadow_uv = light_ndc.xy * 0.5 + 0.5;
-             float shadow_depth = readShadowDepth(i, shadow_uv);
-				float current_depth = light_ndc.z * 0.5 + 0.5;
+				float shadow_depth = readShadowDepth(i, shadow_uv);
+				float current_depth = real_depth * 0.5 + 0.5;
 				if(current_depth > shadow_depth)
 					light_visibility = 0.0;
 			}
