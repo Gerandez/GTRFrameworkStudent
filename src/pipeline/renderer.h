@@ -31,10 +31,20 @@ namespace SCN {
 	class Renderer
 	{
 	public:
+       // 3.1 + 3.5: Shadow map configuration
+		static const int SHADOWMAP_SIZE = 1024;
+		static const int MAX_SHADOW_LIGHTS = 4;
 		bool render_wireframe;
 		bool render_boundaries;
-
+     // 3.4: Global shadow error mitigation controls
+		bool shadow_front_face_culling;
+		float shadow_bias;
 		GFX::Texture* skybox_cubemap;
+      // 3.1 + 3.5
+        std::vector<GFX::FBO*> shadowmap_fbos;
+      // 3.5: Data consumed by the shading pass
+     std::vector<Matrix44> shadow_viewprojections;
+		std::vector<float> shadow_biases;
 
 		SCN::Scene* scene;
 		std::vector<RenderCall> render_calls;
@@ -44,6 +54,8 @@ namespace SCN {
 
 		//just to be sure we have everything ready for the rendering
 		void setupScene();
+		//new function to keep the code clean
+		void renderShadowMap(SCN::Scene* scene);
 
 		//add here your functions
 		//...

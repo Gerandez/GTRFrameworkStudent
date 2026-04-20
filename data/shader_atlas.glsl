@@ -118,10 +118,30 @@ in vec4 v_color;
 
 uniform vec4 u_color;
 uniform sampler2D u_texture;
+// 3.5: Multiple shadow maps
+uniform sampler2D u_shadowmap0;
+uniform sampler2D u_shadowmap1;
+uniform sampler2D u_shadowmap2;
+uniform sampler2D u_shadowmap3;
 uniform float u_time;
 uniform float u_alpha_cutoff;
+// 3.5: Per-light shadow data
+uniform int u_shadow_count;
+uniform float u_shadow_bias[4];
+uniform mat4 u_light_viewprojection[4];
 
 out vec4 FragColor;
+
+float readShadowDepth(int idx, vec2 uv)
+{
+	if(idx == 0)
+		return texture(u_shadowmap0, uv).x;
+	if(idx == 1)
+		return texture(u_shadowmap1, uv).x;
+	if(idx == 2)
+		return texture(u_shadowmap2, uv).x;
+	return texture(u_shadowmap3, uv).x;
+}
 
 void main()
 {
@@ -132,7 +152,32 @@ void main()
 	if(color.a < u_alpha_cutoff)
 		discard;
 
-	FragColor = color;
+   // 3.3 + 3.4.1: Shadow test
+  float lit_lights = 0.0;
+	if(u_shadow_count > 0)
+	{
+      for(int i = 0; i < u_shadow_count; ++i)
+		{
+          float light_visibility = 1.0;
+			vec4 light_pos = u_light_viewprojection[i] * vec4(v_world_position, 1.0);
+			light_pos.z -= u_shadow_bias[i] * light_pos.w;
+			vec3 light_ndc = light_pos.xyz / light_pos.w;
+
+			if(light_ndc.x >= -1.0 && light_ndc.x <= 1.0 && light_ndc.y >= -1.0 && light_ndc.y <= 1.0 && light_ndc.z >= -1.0 && light_ndc.z <= 1.0)
+			{
+				vec2 shadow_uv = light_ndc.xy * 0.5 + 0.5;
+             float shadow_depth = readShadowDepth(i, shadow_uv);
+				float current_depth = light_ndc.z * 0.5 + 0.5;
+				if(current_depth > shadow_depth)
+					light_visibility = 0.0;
+			}
+
+			lit_lights += light_visibility;
+		}
+	}
+	float shadow_factor = u_shadow_count > 0 ? (lit_lights / float(u_shadow_count)) : 1.0;
+
+  FragColor = vec4(color.rgb * mix(0.35, 1.0, shadow_factor), color.a);
 }
 
 
