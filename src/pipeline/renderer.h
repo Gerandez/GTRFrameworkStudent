@@ -18,6 +18,14 @@ namespace SCN {
 	class Prefab;
 	class Material;
 
+	// 3.1: Generate a Render Call struct
+	struct RenderCall {
+		GFX::Mesh* mesh = nullptr;
+		Matrix44 model;
+		SCN::Material* material = nullptr;
+		float distance_to_camera = 0.0f;
+	};
+
 	// This class is in charge of rendering anything in our system.
 	// Separating the render from anything else makes the code cleaner
 	class Renderer
@@ -29,6 +37,7 @@ namespace SCN {
 		GFX::Texture* skybox_cubemap;
 
 		SCN::Scene* scene;
+		std::vector<RenderCall> render_calls;
 
 		//updated every frame
 		Renderer(const char* shaders_atlas_filename );
@@ -39,9 +48,11 @@ namespace SCN {
 		//add here your functions
 		//...
 
+		// 3.2: Parse scene entities to generate render calls
 		void parseSceneEntities(SCN::Scene* scene, Camera* camera);
 
 		//renders several elements of the scene
+		// 3.3 + 3.4: Render scene and order render calls
 		void renderScene(SCN::Scene* scene, Camera* camera);
 
 		//render the skybox

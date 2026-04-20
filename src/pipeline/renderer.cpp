@@ -23,6 +23,40 @@ using namespace SCN;
 //some globals
 GFX::Mesh sphere;
 
+namespace {
+	// 3.5 EXTRA: Frustum culling + recursive node traversal
+	void collectRenderCallsFromNode(
+		SCN::Node* node,
+		const Matrix44& parent_model,
+		Camera* camera,
+		std::vector<SCN::RenderCall>& render_calls)
+	{
+		if (!node)
+			return;
+
+		Matrix44 global_model = node->model * parent_model;
+
+		if (node->visible && node->mesh && node->material)
+		{
+			BoundingBox world_box = transformBoundingBox(global_model, node->mesh->box);
+			bool inside_frustum = !camera || camera->testBoxInFrustum(world_box.center, world_box.halfsize) != CLIP_OUTSIDE;
+
+			if (inside_frustum)
+			{
+				SCN::RenderCall call;
+				call.mesh = node->mesh;
+				call.model = global_model;
+				call.material = node->material;
+				call.distance_to_camera = camera ? camera->eye.distance(global_model.getTranslation()) : 0.0f;
+				render_calls.push_back(call);
+			}
+		}
+
+		for (size_t i = 0; i < node->children.size(); ++i)
+			collectRenderCallsFromNode(node->children[i], global_model, camera, render_calls);
+	}
+}
+
 Renderer::Renderer(const char* shader_atlas_filename)
 {
 	render_wireframe = false;
@@ -51,21 +85,23 @@ void Renderer::parseSceneEntities(SCN::Scene* scene, Camera* cam) {
 	// TODO: GENERATE RENDERABLES
 	// ==========================
 
-	for (int i = 0; i < scene->entities.size(); i++) {
+	// 3.2: Parsing the scene to generate render calls
+	render_calls.clear();
+
+	if (!scene)
+		return;
+
+	for (size_t i = 0; i < scene->entities.size(); ++i)
+	{
 		BaseEntity* entity = scene->entities[i];
-
-		if (!entity->visible) {
+		if (!entity || !entity->visible)
 			continue;
-		}
+		if (entity->getType() != SCN::eEntityType::PREFAB)
+			continue;
 
-		// Store Prefab Entitys
-		// ...
-		//		Store Children Prefab Entities
-
-		// Store Lights
-		// ...
+		PrefabEntity* prefab_entity = (PrefabEntity*)entity;
+		collectRenderCallsFromNode(&prefab_entity->root, Matrix44::IDENTITY, cam, render_calls);
 	}
-	
 }
 
 void Renderer::renderScene(SCN::Scene* scene, Camera* camera)
@@ -89,6 +125,24 @@ void Renderer::renderScene(SCN::Scene* scene, Camera* camera)
 	// HERE =====================
 	// TODO: RENDER RENDERABLES
 	// ==========================
+
+	// 3.4: Order render calls by transparency mode and distance
+	std::sort(render_calls.begin(), render_calls.end(), [](const SCN::RenderCall& a, const SCN::RenderCall& b) {
+		bool a_blend = a.material->alpha_mode == SCN::eAlphaMode::BLEND;
+		bool b_blend = b.material->alpha_mode == SCN::eAlphaMode::BLEND;
+
+		if (a_blend != b_blend)
+			return !a_blend; // Opaque first
+
+		if (a_blend)
+			return a.distance_to_camera > b.distance_to_camera; // Transparent far to near
+
+		return a.distance_to_camera < b.distance_to_camera; // Opaque near to far
+	});
+
+	// 3.3: Render all generated render calls
+	for (size_t i = 0; i < render_calls.size(); ++i)
+		renderMeshWithMaterial(render_calls[i].model, render_calls[i].mesh, render_calls[i].material);
 }
 
 
