@@ -60,15 +60,12 @@ Renderer::Renderer(const char* shader_atlas_filename)
 {
 	render_wireframe = false;
 	render_boundaries = false;
-<<<<<<< Updated upstream
 
 	// 3.4: Shadow error mitigation controls
 	shadow_front_face_culling = true;
 	shadow_bias = 0.001f;
 
-=======
 	multipass_rendering = false;
->>>>>>> Stashed changes
 	scene = nullptr;
 	skybox_cubemap = nullptr;
 
@@ -454,7 +451,6 @@ void Renderer::showUI()
 {
 	ImGui::Checkbox("Wireframe", &render_wireframe);
 	ImGui::Checkbox("Boundaries", &render_boundaries);
-<<<<<<< Updated upstream
 
 	// 3.4 + 3.5: Global shadow controls
 	ImGui::DragFloat("Shadow Bias", &shadow_bias, 0.0001f, 0.0f, 0.1f);
@@ -462,9 +458,7 @@ void Renderer::showUI()
 
 	//add here your stuff
 	//...
-=======
 	ImGui::Checkbox("Multipass Rendering", &multipass_rendering);
->>>>>>> Stashed changes
 }
 
 #else
