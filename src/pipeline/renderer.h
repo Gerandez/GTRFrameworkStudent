@@ -36,9 +36,14 @@ namespace SCN {
 		static const int MAX_SHADOW_LIGHTS = 4;
 		bool render_wireframe;
 		bool render_boundaries;
+<<<<<<< Updated upstream
      // 3.4: Global shadow error mitigation controls
 		bool shadow_front_face_culling;
 		float shadow_bias;
+=======
+		bool multipass_rendering;
+
+>>>>>>> Stashed changes
 		GFX::Texture* skybox_cubemap;
       // 3.1 + 3.5
         std::vector<GFX::FBO*> shadowmap_fbos;
@@ -48,6 +53,7 @@ namespace SCN {
 
 		SCN::Scene* scene;
 		std::vector<RenderCall> render_calls;
+		std::vector<LightEntity*> enabled_lights;
 
 		//updated every frame
 		Renderer(const char* shaders_atlas_filename );

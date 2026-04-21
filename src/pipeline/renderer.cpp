@@ -60,11 +60,15 @@ Renderer::Renderer(const char* shader_atlas_filename)
 {
 	render_wireframe = false;
 	render_boundaries = false;
+<<<<<<< Updated upstream
 
 	// 3.4: Shadow error mitigation controls
 	shadow_front_face_culling = true;
 	shadow_bias = 0.001f;
 
+=======
+	multipass_rendering = false;
+>>>>>>> Stashed changes
 	scene = nullptr;
 	skybox_cubemap = nullptr;
 
@@ -104,6 +108,7 @@ void Renderer::parseSceneEntities(SCN::Scene* scene, Camera* cam)
 
 	// 3.2: Parsing the scene to generate render calls
 	render_calls.clear();
+	enabled_lights.clear();
 
 	if (!scene)
 		return;
@@ -113,11 +118,17 @@ void Renderer::parseSceneEntities(SCN::Scene* scene, Camera* cam)
 		BaseEntity* entity = scene->entities[i];
 		if (!entity || !entity->visible)
 			continue;
-		if (entity->getType() != SCN::eEntityType::PREFAB)
-			continue;
 
-		PrefabEntity* prefab_entity = (PrefabEntity*)entity;
-		collectRenderCallsFromNode(&prefab_entity->root, Matrix44::IDENTITY, cam, render_calls);
+		if (entity->getType() == SCN::eEntityType::PREFAB)
+		{
+			PrefabEntity* prefab_entity = (PrefabEntity*)entity;
+			collectRenderCallsFromNode(&prefab_entity->root, Matrix44::IDENTITY, cam, render_calls);
+		}
+		else if (entity->getType() == SCN::eEntityType::LIGHT)
+		{
+			LightEntity* light_entity = (LightEntity*)entity;
+			enabled_lights.push_back(light_entity);
+		}
 	}
 }
 
@@ -328,8 +339,8 @@ void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN
 
 	glEnable(GL_DEPTH_TEST);
 
-	//chose a shader
-	shader = GFX::Shader::Get("texture");
+	//chose a shader - use phong for lighting
+	shader = GFX::Shader::Get("phong");
 
 	assert(glGetError() == GL_NO_ERROR);
 
@@ -345,7 +356,7 @@ void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN
 
 	// Upload camera uniforms
 	shader->setUniform("u_viewprojection", camera->viewprojection_matrix);
-	shader->setUniform("u_camera_position", camera->eye);
+	shader->setUniform("u_camera_pos", camera->eye);
 
 	// 3.3 + 3.5: Send shadow info to shading pass
 	shader->setUniform("u_shadow_count", (int)shadow_viewprojections.size());
@@ -363,6 +374,64 @@ void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN
 	// Upload time, for cool shader effects
 	float t = getTime();
 	shader->setUniform("u_time", t);
+
+	// Upload light arrays
+	int num_lights = (int)enabled_lights.size();
+	if (num_lights > 8) num_lights = 8; // MAX_LIGHTS in shader
+
+	shader->setUniform("u_num_lights", num_lights);
+
+	if (num_lights > 0)
+	{
+		// Prepare arrays for uniforms
+		std::vector<int> light_type_array(num_lights);
+		std::vector<float> light_pos_array(num_lights * 3);
+		std::vector<float> light_dir_array(num_lights * 3);
+		std::vector<float> light_color_array(num_lights * 3);
+		std::vector<float> light_intensity_array(num_lights);
+		std::vector<float> light_near_array(num_lights);
+		std::vector<float> light_max_array(num_lights);
+		std::vector<float> light_cone_array(num_lights * 2); // vec2 usa 2 floats
+
+		for (int i = 0; i < num_lights; i++)
+		{
+			LightEntity* light = enabled_lights[i];
+			Matrix44 light_model = light->root.getGlobalMatrix();
+
+			light_type_array[i] = (int)light->light_type;
+
+			vec3 light_world_pos = light_model.getTranslation();
+			light_pos_array[i * 3 + 0] = light_world_pos.x;
+			light_pos_array[i * 3 + 1] = light_world_pos.y;
+			light_pos_array[i * 3 + 2] = light_world_pos.z;
+
+			// Get light direction from the model's front vector
+			vec3 light_front = light_model.frontVector();
+			light_dir_array[i * 3 + 0] = light_front.x;
+			light_dir_array[i * 3 + 1] = light_front.y;
+			light_dir_array[i * 3 + 2] = light_front.z;
+
+			light_color_array[i * 3 + 0] = light->color.x;
+			light_color_array[i * 3 + 1] = light->color.y;
+			light_color_array[i * 3 + 2] = light->color.z;
+
+			light_intensity_array[i] = light->intensity;
+			light_near_array[i] = light->near_distance;
+			light_max_array[i] = light->max_distance;
+
+			light_cone_array[i * 2 + 0] = light->cone_info.x * DEG2RAD;
+			light_cone_array[i * 2 + 1] = light->cone_info.y * DEG2RAD;
+		}
+
+		shader->setUniform1Array("u_light_type", light_type_array.data(), num_lights);
+		shader->setUniform3Array("u_light_pos", light_pos_array.data(), num_lights);
+		shader->setUniform3Array("u_light_dir", light_dir_array.data(), num_lights);
+		shader->setUniform3Array("u_light_color", light_color_array.data(), num_lights);
+		shader->setUniform1Array("u_light_intensity", light_intensity_array.data(), num_lights);
+		shader->setUniform1Array("u_light_near", light_near_array.data(), num_lights);
+		shader->setUniform1Array("u_light_max", light_max_array.data(), num_lights);
+		shader->setUniform2Array("u_light_cone", light_cone_array.data(), num_lights);
+	}
 
 	// Render just the verticies as a wireframe
 	if (render_wireframe)
@@ -385,6 +454,7 @@ void Renderer::showUI()
 {
 	ImGui::Checkbox("Wireframe", &render_wireframe);
 	ImGui::Checkbox("Boundaries", &render_boundaries);
+<<<<<<< Updated upstream
 
 	// 3.4 + 3.5: Global shadow controls
 	ImGui::DragFloat("Shadow Bias", &shadow_bias, 0.0001f, 0.0f, 0.1f);
@@ -392,6 +462,9 @@ void Renderer::showUI()
 
 	//add here your stuff
 	//...
+=======
+	ImGui::Checkbox("Multipass Rendering", &multipass_rendering);
+>>>>>>> Stashed changes
 }
 
 #else
