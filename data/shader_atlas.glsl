@@ -249,6 +249,15 @@ uniform float u_alpha_cutoff;
 uniform float u_shininess;
 uniform sampler2D u_normalmap;
 
+// Shadow map uniforms
+uniform sampler2D u_shadowmap0;
+uniform sampler2D u_shadowmap1;
+uniform sampler2D u_shadowmap2;
+uniform sampler2D u_shadowmap3;
+uniform int u_shadow_count;
+uniform float u_shadow_bias[4];
+uniform mat4 u_light_viewprojection[4];
+
 // Perturb normal functions (from cg_stdskybox)
 mat3 cotangent_frame(vec3 N, vec3 p, vec2 uv)
 {
@@ -268,6 +277,37 @@ vec3 perturbNormal(vec3 N, vec3 WP, vec2 uv, vec3 normal_pixel)
 {
 	mat3 TBN = cotangent_frame(N, WP, uv);
 	return normalize(TBN * normal_pixel);
+}
+
+// Shadow map functions
+float readShadowDepth(int idx, vec2 uv)
+{
+	if(idx == 0)
+		return texture(u_shadowmap0, uv).x;
+	if(idx == 1)
+		return texture(u_shadowmap1, uv).x;
+	if(idx == 2)
+		return texture(u_shadowmap2, uv).x;
+	return texture(u_shadowmap3, uv).x;
+}
+
+float calculateShadow(int idx, vec3 world_pos)
+{
+	vec4 proj_pos = u_light_viewprojection[idx] * vec4(world_pos, 1.0);
+	vec3 light_ndc = proj_pos.xyz / proj_pos.w;
+
+	// Check if fragment is within light frustum
+	if(light_ndc.x < -1.0 || light_ndc.x > 1.0 || light_ndc.y < -1.0 || light_ndc.y > 1.0 || light_ndc.z < 0.0 || light_ndc.z > 1.0)
+		return 1.0; // Outside frustum, not in shadow
+
+	vec2 shadow_uv = light_ndc.xy * 0.5 + 0.5;
+	float shadow_depth = readShadowDepth(idx, shadow_uv);
+	
+	// Compare depth with bias
+	if(light_ndc.z > shadow_depth + u_shadow_bias[idx])
+		return 0.0; // In shadow
+
+	return 1.0; // Not in shadow
 }
 
 uniform vec3 u_camera_pos;
@@ -379,8 +419,20 @@ void main()
 		total_specular += spec * u_light_color[i] * u_light_intensity[i] * attenuation;
 	}
 
-	// Final color: ambient + diffuse + specular
-	vec3 final_color = ambient + total_diffuse + total_specular;
+	// Apply shadow factor to lighting
+	float shadow_factor = 1.0;
+	if (u_shadow_count > 0)
+	{
+		float total_visibility = 0.0;
+		for (int i = 0; i < u_shadow_count; i++)
+		{
+			total_visibility += calculateShadow(i, v_world_position);
+		}
+		shadow_factor = total_visibility / float(u_shadow_count);
+	}
+
+	// Final color: ambient + diffuse + specular (with shadow)
+	vec3 final_color = ambient + (total_diffuse + total_specular) * shadow_factor;
 
 	FragColor = vec4(final_color, albedo.a);
 }

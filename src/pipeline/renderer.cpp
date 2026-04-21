@@ -245,6 +245,8 @@ void Renderer::renderShadowMap(SCN::Scene* scene)
 
 		// 3.2.2: Z-Prepass style render to depth-only shadow map
 		shadow_fbo->bind();
+		glDrawBuffer(GL_NONE); // No color buffer for shadow map
+		glReadBuffer(GL_NONE);
 		glClear(GL_DEPTH_BUFFER_BIT);
 		glColorMask(false, false, false, false);
 		glEnable(GL_DEPTH_TEST);
@@ -278,6 +280,7 @@ void Renderer::renderShadowMap(SCN::Scene* scene)
 		shadow_shader->disable();
 		glCullFace(GL_BACK);
 		glColorMask(true, true, true, true);
+		glDrawBuffer(GL_COLOR_ATTACHMENT0); // Restore default
 		shadow_fbo->unbind();
 	}
 }
