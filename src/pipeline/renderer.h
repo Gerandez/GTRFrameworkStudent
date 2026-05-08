@@ -42,6 +42,8 @@ namespace SCN {
 		bool multipass_rendering;
 
 		GFX::Texture* skybox_cubemap;
+		GFX::FBO* gbuffer_fbo;
+		GFX::FBO* lighting_fbo;
       // 3.1 + 3.5
         std::vector<GFX::FBO*> shadowmap_fbos;
       // 3.5: Data consumed by the shading pass
@@ -75,6 +77,14 @@ namespace SCN {
 
 		//to render one mesh given its material and transformation matrix
 		void renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN::Material* material);
+		void renderMeshToGBuffer(const Matrix44 model, GFX::Mesh* mesh, SCN::Material* material);
+		void renderForward();
+		void renderDeferred(Camera* camera);
+		void renderDeferredAmbient(Camera* camera);
+		void renderDeferredLightVolumes(Camera* camera);
+		void sendLightUniforms(GFX::Shader* shader);
+		void sendShadowUniforms(GFX::Shader* shader);
+		void updateDeferredFBOs();
 
 		void showUI();
 	};

@@ -13,6 +13,7 @@
 #include "../pipeline/animation.h"
 #include "../utils/utils.h"
 #include "../extra/hdre.h"
+#include "../core/core.h"
 #include "../core/ui.h"
 
 #include "scene.h"
@@ -68,6 +69,8 @@ Renderer::Renderer(const char* shader_atlas_filename)
 	multipass_rendering = false;
 	scene = nullptr;
 	skybox_cubemap = nullptr;
+	gbuffer_fbo = new GFX::FBO();
+	lighting_fbo = new GFX::FBO();
 
    // 3.5: Reset per-frame shadow containers
 	shadow_viewprojections.clear();
@@ -141,6 +144,30 @@ void Renderer::renderScene(SCN::Scene* scene, Camera* camera)
 
 	parseSceneEntities(scene, camera);
 
+	std::sort(render_calls.begin(), render_calls.end(), [](const SCN::RenderCall& a, const SCN::RenderCall& b) {
+		bool a_blend = a.material->alpha_mode == SCN::eAlphaMode::BLEND;
+		bool b_blend = b.material->alpha_mode == SCN::eAlphaMode::BLEND;
+
+		if (a_blend != b_blend)
+			return !a_blend;
+
+		if (a_blend)
+			return a.distance_to_camera > b.distance_to_camera;
+
+		return a.distance_to_camera < b.distance_to_camera;
+	});
+
+	if (multipass_rendering)
+	{
+		renderDeferred(camera);
+		return;
+	}
+
+	renderForward();
+}
+
+void Renderer::renderForward()
+{
 	//set the clear color (the background color)
 	glClearColor(scene->background_color.x, scene->background_color.y, scene->background_color.z, 1.0);
 
@@ -156,23 +183,61 @@ void Renderer::renderScene(SCN::Scene* scene, Camera* camera)
 	// TODO: RENDER RENDERABLES
 	// ==========================
 
-	// 3.4: Order render calls by transparency mode and distance
-	std::sort(render_calls.begin(), render_calls.end(), [](const SCN::RenderCall& a, const SCN::RenderCall& b) {
-		bool a_blend = a.material->alpha_mode == SCN::eAlphaMode::BLEND;
-		bool b_blend = b.material->alpha_mode == SCN::eAlphaMode::BLEND;
-
-		if (a_blend != b_blend)
-			return !a_blend; // Opaque first
-
-		if (a_blend)
-			return a.distance_to_camera > b.distance_to_camera; // Transparent far to near
-
-		return a.distance_to_camera < b.distance_to_camera; // Opaque near to far
-	});
-
 	// 3.3: Render all generated render calls
 	for (size_t i = 0; i < render_calls.size(); ++i)
 		renderMeshWithMaterial(render_calls[i].model, render_calls[i].mesh, render_calls[i].material);
+}
+
+void Renderer::updateDeferredFBOs()
+{
+	Vector2ui window_size = CORE::getWindowSize();
+	if (!gbuffer_fbo->fbo_id || gbuffer_fbo->width != (int)window_size.x || gbuffer_fbo->height != (int)window_size.y)
+	{
+		gbuffer_fbo->create(window_size.x, window_size.y, 2, GL_RGBA, GL_UNSIGNED_BYTE, true);
+		lighting_fbo->create(window_size.x, window_size.y, 1, GL_RGBA, GL_UNSIGNED_BYTE, true);
+	}
+}
+
+void Renderer::renderDeferred(Camera* camera)
+{
+	updateDeferredFBOs();
+
+	gbuffer_fbo->bind();
+	glClearColor(0.0, 0.0, 0.0, 1.0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glEnable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+
+	for (size_t i = 0; i < render_calls.size(); ++i)
+	{
+		if (render_calls[i].material->alpha_mode == SCN::eAlphaMode::BLEND)
+			continue;
+		renderMeshToGBuffer(render_calls[i].model, render_calls[i].mesh, render_calls[i].material);
+	}
+
+	gbuffer_fbo->unbind();
+
+	gbuffer_fbo->depth_texture->copyTo(lighting_fbo->depth_texture);
+	lighting_fbo->bind();
+	glClearColor(scene->background_color.x, scene->background_color.y, scene->background_color.z, 1.0);
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	if (skybox_cubemap)
+		renderSkybox(skybox_cubemap);
+
+	renderDeferredAmbient(camera);
+	renderDeferredLightVolumes(camera);
+	lighting_fbo->unbind();
+
+	lighting_fbo->color_textures[0]->toViewport();
+	gbuffer_fbo->depth_texture->copyTo(NULL);
+
+	for (size_t i = 0; i < render_calls.size(); ++i)
+	{
+		if (render_calls[i].material->alpha_mode != SCN::eAlphaMode::BLEND)
+			continue;
+		renderMeshWithMaterial(render_calls[i].model, render_calls[i].mesh, render_calls[i].material);
+	}
 }
 
 void Renderer::renderShadowMap(SCN::Scene* scene)
@@ -448,6 +513,182 @@ void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
+void Renderer::renderMeshToGBuffer(const Matrix44 model, GFX::Mesh* mesh, SCN::Material* material)
+{
+	if (!mesh || !mesh->getNumVertices() || !material)
+		return;
+
+	GFX::Shader* shader = GFX::Shader::Get("gbuffer");
+
+	glEnable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+
+	shader->enable();
+	material->bind(shader);
+	shader->setUniform("u_model", model);
+	shader->setUniform("u_viewprojection", Camera::current->viewprojection_matrix);
+	shader->setUniform("u_camera_pos", Camera::current->eye);
+	shader->setUniform("u_has_normalmap", material->textures[SCN::eTextureChannel::NORMALMAP].texture != NULL);
+	shader->setUniform("u_time", (float)getTime());
+
+	if (render_wireframe)
+		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+	mesh->render(GL_TRIANGLES);
+
+	shader->disable();
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
+
+void Renderer::sendShadowUniforms(GFX::Shader* shader)
+{
+	shader->setUniform("u_shadow_count", (int)shadow_viewprojections.size());
+	if (shadow_viewprojections.empty())
+		return;
+
+	shader->setUniform("u_light_viewprojection", shadow_viewprojections);
+	shader->setUniform1Array("u_shadow_bias", &shadow_biases[0], (int)shadow_biases.size());
+
+	if (shadow_viewprojections.size() > 0) shader->setUniform("u_shadowmap0", shadowmap_fbos[0]->depth_texture, 3);
+	if (shadow_viewprojections.size() > 1) shader->setUniform("u_shadowmap1", shadowmap_fbos[1]->depth_texture, 4);
+	if (shadow_viewprojections.size() > 2) shader->setUniform("u_shadowmap2", shadowmap_fbos[2]->depth_texture, 5);
+	if (shadow_viewprojections.size() > 3) shader->setUniform("u_shadowmap3", shadowmap_fbos[3]->depth_texture, 6);
+}
+
+void Renderer::sendLightUniforms(GFX::Shader* shader)
+{
+	int num_lights = (int)enabled_lights.size();
+	if (num_lights > 8) num_lights = 8;
+
+	shader->setUniform("u_num_lights", num_lights);
+	if (num_lights == 0)
+		return;
+
+	std::vector<int> light_type_array(num_lights);
+	std::vector<float> light_pos_array(num_lights * 3);
+	std::vector<float> light_dir_array(num_lights * 3);
+	std::vector<float> light_color_array(num_lights * 3);
+	std::vector<float> light_intensity_array(num_lights);
+	std::vector<float> light_near_array(num_lights);
+	std::vector<float> light_max_array(num_lights);
+	std::vector<float> light_cone_array(num_lights * 2);
+
+	for (int i = 0; i < num_lights; i++)
+	{
+		LightEntity* light = enabled_lights[i];
+		Matrix44 light_model = light->root.getGlobalMatrix();
+
+		light_type_array[i] = (int)light->light_type;
+
+		vec3 light_world_pos = light_model.getTranslation();
+		light_pos_array[i * 3 + 0] = light_world_pos.x;
+		light_pos_array[i * 3 + 1] = light_world_pos.y;
+		light_pos_array[i * 3 + 2] = light_world_pos.z;
+
+		vec3 light_front = light_model.frontVector();
+		light_dir_array[i * 3 + 0] = light_front.x;
+		light_dir_array[i * 3 + 1] = light_front.y;
+		light_dir_array[i * 3 + 2] = light_front.z;
+
+		light_color_array[i * 3 + 0] = light->color.x;
+		light_color_array[i * 3 + 1] = light->color.y;
+		light_color_array[i * 3 + 2] = light->color.z;
+
+		light_intensity_array[i] = light->intensity;
+		light_near_array[i] = light->near_distance;
+		light_max_array[i] = light->max_distance;
+
+		light_cone_array[i * 2 + 0] = light->cone_info.x * DEG2RAD;
+		light_cone_array[i * 2 + 1] = light->cone_info.y * DEG2RAD;
+	}
+
+	shader->setUniform1Array("u_light_type", light_type_array.data(), num_lights);
+	shader->setUniform3Array("u_light_pos", light_pos_array.data(), num_lights);
+	shader->setUniform3Array("u_light_dir", light_dir_array.data(), num_lights);
+	shader->setUniform3Array("u_light_color", light_color_array.data(), num_lights);
+	shader->setUniform1Array("u_light_intensity", light_intensity_array.data(), num_lights);
+	shader->setUniform1Array("u_light_near", light_near_array.data(), num_lights);
+	shader->setUniform1Array("u_light_max", light_max_array.data(), num_lights);
+	shader->setUniform2Array("u_light_cone", light_cone_array.data(), num_lights);
+}
+
+void Renderer::renderDeferredAmbient(Camera* camera)
+{
+	GFX::Shader* shader = GFX::Shader::Get("deferred_ambient");
+	GFX::Mesh* quad = GFX::Mesh::getQuad();
+	Vector2f res_inv(1.0f / gbuffer_fbo->width, 1.0f / gbuffer_fbo->height);
+
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+	glDisable(GL_CULL_FACE);
+
+	shader->enable();
+	shader->setUniform("u_gbuffer_color", gbuffer_fbo->color_textures[0], 0);
+	shader->setUniform("u_gbuffer_normal", gbuffer_fbo->color_textures[1], 1);
+	shader->setUniform("u_gbuffer_depth", gbuffer_fbo->depth_texture, 2);
+	shader->setUniform("u_res_inv", res_inv);
+	shader->setUniform("u_inv_vp_mat", camera->inverse_viewprojection_matrix);
+	shader->setUniform("u_camera_pos", camera->eye);
+	shader->setUniform("u_ambient_light", scene->ambient_light);
+	sendLightUniforms(shader);
+	sendShadowUniforms(shader);
+	quad->render(GL_TRIANGLES);
+	shader->disable();
+}
+
+void Renderer::renderDeferredLightVolumes(Camera* camera)
+{
+	GFX::Shader* shader = GFX::Shader::Get("deferred_light_volume");
+	Vector2f res_inv(1.0f / gbuffer_fbo->width, 1.0f / gbuffer_fbo->height);
+	int num_lights = (int)enabled_lights.size();
+	if (num_lights > 8)
+		num_lights = 8;
+
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_GREATER);
+	glDepthMask(GL_FALSE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_ONE, GL_ONE);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+	glFrontFace(GL_CW);
+
+	shader->enable();
+	shader->setUniform("u_gbuffer_color", gbuffer_fbo->color_textures[0], 0);
+	shader->setUniform("u_gbuffer_normal", gbuffer_fbo->color_textures[1], 1);
+	shader->setUniform("u_gbuffer_depth", gbuffer_fbo->depth_texture, 2);
+	shader->setUniform("u_res_inv", res_inv);
+	shader->setUniform("u_inv_vp_mat", camera->inverse_viewprojection_matrix);
+	shader->setUniform("u_viewprojection", camera->viewprojection_matrix);
+	shader->setUniform("u_camera_pos", camera->eye);
+	sendLightUniforms(shader);
+	sendShadowUniforms(shader);
+
+	for (int i = 0; i < num_lights; ++i)
+	{
+		LightEntity* light = enabled_lights[i];
+		if (light->light_type == SCN::eLightType::DIRECTIONAL)
+			continue;
+
+		Matrix44 light_model = light->root.getGlobalMatrix();
+		vec3 light_pos = light_model.getTranslation();
+		Matrix44 model;
+		model.setTranslation(light_pos.x, light_pos.y, light_pos.z);
+		model.scale(light->max_distance, light->max_distance, light->max_distance);
+
+		shader->setUniform("u_model", model);
+		shader->setUniform("u_light_index", i);
+		sphere.render(GL_TRIANGLES);
+	}
+
+	shader->disable();
+	glFrontFace(GL_CCW);
+	glCullFace(GL_BACK);
+	glDepthMask(GL_TRUE);
+	glDepthFunc(GL_LESS);
+	glDisable(GL_BLEND);
+}
+
 #ifndef SKIP_IMGUI
 
 void Renderer::showUI()
@@ -461,7 +702,7 @@ void Renderer::showUI()
 
 	//add here your stuff
 	//...
-	ImGui::Checkbox("Multipass Rendering", &multipass_rendering);
+	ImGui::Checkbox("Deferred Rendering", &multipass_rendering);
 }
 
 #else
