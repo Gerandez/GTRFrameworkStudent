@@ -304,7 +304,7 @@ void Renderer::renderShadowMap(SCN::Scene* scene)
 		}
 
 		shadow_viewprojections.push_back(shadow_camera.viewprojection_matrix);
-		shadow_biases.push_back(shadow_bias);
+		shadow_biases.push_back(shadow_bias + light->shadow_bias);
 
 		parseSceneEntities(scene, &shadow_camera);
 
@@ -471,7 +471,7 @@ void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN
 			light_pos_array[i * 3 + 2] = light_world_pos.z;
 
 			// Get light direction from the model's front vector
-			vec3 light_front = light_model.frontVector();
+			vec3 light_front = light_model.rotateVector(vec3(0.0f, 0.0f, -1.0f));
 			light_dir_array[i * 3 + 0] = light_front.x;
 			light_dir_array[i * 3 + 1] = light_front.y;
 			light_dir_array[i * 3 + 2] = light_front.z;

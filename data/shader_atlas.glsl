@@ -300,14 +300,16 @@ float calculateShadow(int idx, vec3 world_pos)
 	vec3 light_ndc = proj_pos.xyz / proj_pos.w;
 
 	// Check if fragment is within light frustum
-	if(light_ndc.x < -1.0 || light_ndc.x > 1.0 || light_ndc.y < -1.0 || light_ndc.y > 1.0 || light_ndc.z < 0.0 || light_ndc.z > 1.0)
+	if(light_ndc.x < -1.0 || light_ndc.x > 1.0 || light_ndc.y < -1.0 || light_ndc.y > 1.0 || light_ndc.z < -1.0 || light_ndc.z > 1.0)
 		return 1.0; // Outside frustum, not in shadow
 
 	vec2 shadow_uv = light_ndc.xy * 0.5 + 0.5;
 	float shadow_depth = readShadowDepth(idx, shadow_uv);
 	
 	// Compare depth with bias
-	if(light_ndc.z > shadow_depth + u_shadow_bias[idx])
+	float real_depth = (proj_pos.z - u_shadow_bias[idx]) / proj_pos.w;
+	float current_depth = real_depth * 0.5 + 0.5;
+	if(current_depth > shadow_depth)
 		return 0.0; // In shadow
 
 	return 1.0; // Not in shadow
@@ -384,7 +386,7 @@ void main()
 
 			float cos_inner = cos(u_light_cone[i].x);
 			float cos_outer = cos(u_light_cone[i].y);
-			float spot_effect = dot(light_dir, normalize(u_light_dir[i]));
+			float spot_effect = dot(-light_dir, normalize(u_light_dir[i]));
 
 			// El coseno exterior es MENOR que el interior (ej. cos(45º) < cos(10º))
 			if (spot_effect < cos_outer)
@@ -394,7 +396,7 @@ void main()
 			float spot_atten = clamp((spot_effect - cos_outer) / (cos_inner - cos_outer), 0.0, 1.0);
 
 			// Atenuación final (distancia + cono)
-			attenuation = spot_atten / (1.0 + 0.09 * dist + 0.032 * dist * dist);
+			attenuation = spot_atten / (dist * dist);
 
 		}
 		else // LIGHT_POINT
@@ -409,7 +411,7 @@ void main()
 				continue;
 
 			// Quadratic attenuation
-			attenuation = 1.0 / (1.0 + 0.09 * dist + 0.032 * dist * dist);
+			attenuation = 1.0 / (dist * dist);
 		}
 
 		// Diffuse - invariant to camera position
