@@ -433,10 +433,10 @@ void Renderer::renderMeshWithMaterial(const Matrix44 model, GFX::Mesh* mesh, SCN
 		shader->setUniform("u_light_viewprojection", shadow_viewprojections);
 		shader->setUniform1Array("u_shadow_bias", &shadow_biases[0], (int)shadow_biases.size());
 
-		if (shadow_viewprojections.size() > 0) shader->setUniform("u_shadowmap0", shadowmap_fbos[0]->depth_texture, 2);
-		if (shadow_viewprojections.size() > 1) shader->setUniform("u_shadowmap1", shadowmap_fbos[1]->depth_texture, 3);
-		if (shadow_viewprojections.size() > 2) shader->setUniform("u_shadowmap2", shadowmap_fbos[2]->depth_texture, 4);
-		if (shadow_viewprojections.size() > 3) shader->setUniform("u_shadowmap3", shadowmap_fbos[3]->depth_texture, 5);
+		if (shadow_viewprojections.size() > 0) shader->setUniform("u_shadowmap0", shadowmap_fbos[0]->depth_texture, 3);
+		if (shadow_viewprojections.size() > 1) shader->setUniform("u_shadowmap1", shadowmap_fbos[1]->depth_texture, 4);
+		if (shadow_viewprojections.size() > 2) shader->setUniform("u_shadowmap2", shadowmap_fbos[2]->depth_texture, 5);
+		if (shadow_viewprojections.size() > 3) shader->setUniform("u_shadowmap3", shadowmap_fbos[3]->depth_texture, 6);
 	}
 
 	// Upload time, for cool shader effects
@@ -543,7 +543,7 @@ void Renderer::renderMeshToGBuffer(const Matrix44 model, GFX::Mesh* mesh, SCN::M
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 
-void Renderer::sendShadowUniforms(GFX::Shader* shader)
+void Renderer::sendShadowUniforms(GFX::Shader* shader, int first_slot)
 {
 	shader->setUniform("u_shadow_count", (int)shadow_viewprojections.size());
 	if (shadow_viewprojections.empty())
@@ -552,10 +552,10 @@ void Renderer::sendShadowUniforms(GFX::Shader* shader)
 	shader->setUniform("u_light_viewprojection", shadow_viewprojections);
 	shader->setUniform1Array("u_shadow_bias", &shadow_biases[0], (int)shadow_biases.size());
 
-	if (shadow_viewprojections.size() > 0) shader->setUniform("u_shadowmap0", shadowmap_fbos[0]->depth_texture, 3);
-	if (shadow_viewprojections.size() > 1) shader->setUniform("u_shadowmap1", shadowmap_fbos[1]->depth_texture, 4);
-	if (shadow_viewprojections.size() > 2) shader->setUniform("u_shadowmap2", shadowmap_fbos[2]->depth_texture, 5);
-	if (shadow_viewprojections.size() > 3) shader->setUniform("u_shadowmap3", shadowmap_fbos[3]->depth_texture, 6);
+	if (shadow_viewprojections.size() > 0) shader->setUniform("u_shadowmap0", shadowmap_fbos[0]->depth_texture, first_slot);
+	if (shadow_viewprojections.size() > 1) shader->setUniform("u_shadowmap1", shadowmap_fbos[1]->depth_texture, first_slot + 1);
+	if (shadow_viewprojections.size() > 2) shader->setUniform("u_shadowmap2", shadowmap_fbos[2]->depth_texture, first_slot + 2);
+	if (shadow_viewprojections.size() > 3) shader->setUniform("u_shadowmap3", shadowmap_fbos[3]->depth_texture, first_slot + 3);
 }
 
 void Renderer::sendLightUniforms(GFX::Shader* shader)
@@ -635,7 +635,7 @@ void Renderer::renderDeferredAmbient(Camera* camera)
 	shader->setUniform("u_camera_pos", camera->eye);
 	shader->setUniform("u_ambient_light", scene->ambient_light);
 	sendLightUniforms(shader);
-	sendShadowUniforms(shader);
+	sendShadowUniforms(shader, 4);
 	quad->render(GL_TRIANGLES);
 	shader->disable();
 }
@@ -667,7 +667,7 @@ void Renderer::renderDeferredLightVolumes(Camera* camera)
 	shader->setUniform("u_viewprojection", camera->viewprojection_matrix);
 	shader->setUniform("u_camera_pos", camera->eye);
 	sendLightUniforms(shader);
-	sendShadowUniforms(shader);
+	sendShadowUniforms(shader, 4);
 
 	for (int i = 0; i < num_lights; ++i)
 	{

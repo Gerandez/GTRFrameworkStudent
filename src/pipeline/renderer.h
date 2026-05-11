@@ -83,7 +83,7 @@ namespace SCN {
 		void renderDeferredAmbient(Camera* camera);
 		void renderDeferredLightVolumes(Camera* camera);
 		void sendLightUniforms(GFX::Shader* shader);
-		void sendShadowUniforms(GFX::Shader* shader);
+		void sendShadowUniforms(GFX::Shader* shader, int first_slot = 3);
 		void updateDeferredFBOs();
 
 		void showUI();
