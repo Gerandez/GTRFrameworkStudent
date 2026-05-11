@@ -193,7 +193,7 @@ void Renderer::updateDeferredFBOs()
 	Vector2ui window_size = CORE::getWindowSize();
 	if (!gbuffer_fbo->fbo_id || gbuffer_fbo->width != (int)window_size.x || gbuffer_fbo->height != (int)window_size.y)
 	{
-		gbuffer_fbo->create(window_size.x, window_size.y, 2, GL_RGBA, GL_UNSIGNED_BYTE, true);
+		gbuffer_fbo->create(window_size.x, window_size.y, 3, GL_RGBA, GL_UNSIGNED_BYTE, true);
 		lighting_fbo->create(window_size.x, window_size.y, 1, GL_RGBA, GL_UNSIGNED_BYTE, true);
 	}
 }
@@ -228,6 +228,9 @@ void Renderer::renderDeferred(Camera* camera)
 	renderDeferredAmbient(camera);
 	renderDeferredLightVolumes(camera);
 	lighting_fbo->unbind();
+
+	glClearColor(scene->background_color.x, scene->background_color.y, scene->background_color.z, 1.0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	lighting_fbo->color_textures[0]->toViewport();
 	gbuffer_fbo->depth_texture->copyTo(NULL);
@@ -625,7 +628,8 @@ void Renderer::renderDeferredAmbient(Camera* camera)
 	shader->enable();
 	shader->setUniform("u_gbuffer_color", gbuffer_fbo->color_textures[0], 0);
 	shader->setUniform("u_gbuffer_normal", gbuffer_fbo->color_textures[1], 1);
-	shader->setUniform("u_gbuffer_depth", gbuffer_fbo->depth_texture, 2);
+	shader->setUniform("u_gbuffer_metallic_roughness", gbuffer_fbo->color_textures[2], 2);
+	shader->setUniform("u_gbuffer_depth", gbuffer_fbo->depth_texture, 3);
 	shader->setUniform("u_res_inv", res_inv);
 	shader->setUniform("u_inv_vp_mat", camera->inverse_viewprojection_matrix);
 	shader->setUniform("u_camera_pos", camera->eye);
@@ -656,7 +660,8 @@ void Renderer::renderDeferredLightVolumes(Camera* camera)
 	shader->enable();
 	shader->setUniform("u_gbuffer_color", gbuffer_fbo->color_textures[0], 0);
 	shader->setUniform("u_gbuffer_normal", gbuffer_fbo->color_textures[1], 1);
-	shader->setUniform("u_gbuffer_depth", gbuffer_fbo->depth_texture, 2);
+	shader->setUniform("u_gbuffer_metallic_roughness", gbuffer_fbo->color_textures[2], 2);
+	shader->setUniform("u_gbuffer_depth", gbuffer_fbo->depth_texture, 3);
 	shader->setUniform("u_res_inv", res_inv);
 	shader->setUniform("u_inv_vp_mat", camera->inverse_viewprojection_matrix);
 	shader->setUniform("u_viewprojection", camera->viewprojection_matrix);

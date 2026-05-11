@@ -40,6 +40,74 @@ vec3 perturbNormal(vec3 N, vec3 WP, vec2 uv, vec3 normal_pixel)
 	return normalize(TBN * normal_pixel);
 }
 
+\brdf
+
+const float PBR_PI = 3.14159265359;
+const float PBR_EPSILON = 1e-4;
+
+float saturate(float value)
+{
+	return clamp(value, 0.0, 1.0);
+}
+
+float DistributionGGX(vec3 N, vec3 H, float roughness)
+{
+	float a = roughness * roughness;
+	float a2 = a * a;
+	float NdotH = max(dot(N, H), 0.0);
+	float NdotH2 = NdotH * NdotH;
+	float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+	return a2 / max(PBR_PI * denom * denom, PBR_EPSILON);
+}
+
+float GeometrySchlickGGX(float NdotV, float roughness)
+{
+	float r = roughness + 1.0;
+	float k = (r * r) / 8.0;
+	return NdotV / max(NdotV * (1.0 - k) + k, PBR_EPSILON);
+}
+
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
+{
+	float NdotV = max(dot(N, V), 0.0);
+	float NdotL = max(dot(N, L), 0.0);
+	float ggx1 = GeometrySchlickGGX(NdotV, roughness);
+	float ggx2 = GeometrySchlickGGX(NdotL, roughness);
+	return ggx1 * ggx2;
+}
+
+vec3 FresnelSchlick(float cosTheta, vec3 F0)
+{
+	return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+}
+
+vec3 BRDF_PBR(vec3 N, vec3 V, vec3 L, vec3 albedo, float metallic, float roughness)
+{
+	float NdotL = max(dot(N, L), 0.0);
+	float NdotV = max(dot(N, V), 0.0);
+	if (NdotL <= 0.0 || NdotV <= 0.0)
+		return vec3(0.0);
+
+	vec3 H = normalize(V + L);
+	float NdotH = max(dot(N, H), 0.0);
+	float VdotH = max(dot(V, H), 0.0);
+
+	vec3 F0 = mix(vec3(0.04), albedo, metallic);
+	vec3 F = FresnelSchlick(VdotH, F0);
+	float D = DistributionGGX(N, H, roughness);
+	float G = GeometrySmith(N, V, L, roughness);
+
+	vec3 numerator = D * G * F;
+	float denominator = max(4.0 * NdotV * NdotL, PBR_EPSILON);
+	vec3 specular = numerator / denominator;
+
+	vec3 kS = F;
+	vec3 kD = (1.0 - kS) * (1.0 - metallic);
+	kD *= 1.0 / PBR_PI;
+
+	return (kD * albedo + specular) * NdotL;
+}
+
 \basic.vs
 
 #version 330 core
@@ -251,6 +319,10 @@ uniform float u_time;
 uniform float u_alpha_cutoff;
 uniform float u_shininess;
 uniform sampler2D u_normalmap;
+uniform sampler2D u_metallic_roughness;
+uniform bool u_has_metallic_roughness;
+uniform float u_metallic_factor;
+uniform float u_roughness_factor;
 
 // Shadow map uniforms
 uniform sampler2D u_shadowmap0;
@@ -261,26 +333,8 @@ uniform int u_shadow_count;
 uniform float u_shadow_bias[4];
 uniform mat4 u_light_viewprojection[4];
 
-// Perturb normal functions (from cg_stdskybox)
-mat3 cotangent_frame(vec3 N, vec3 p, vec2 uv)
-{
-	vec3 dp1 = dFdx(p);
-	vec3 dp2 = dFdy(p);
-	vec2 duv1 = dFdx(uv);
-	vec2 duv2 = dFdy(uv);
-	vec3 dp2perp = cross(dp2, N);
-	vec3 dp1perp = cross(N, dp1);
-	vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
-	vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
-	float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
-	return mat3(T * invmax, B * invmax, N);
-}
-
-vec3 perturbNormal(vec3 N, vec3 WP, vec2 uv, vec3 normal_pixel)
-{
-	mat3 TBN = cotangent_frame(N, WP, uv);
-	return normalize(TBN * normal_pixel);
-}
+#include "perturbNormal"
+#include "brdf"
 
 // Shadow map functions
 float readShadowDepth(int idx, vec2 uv)
@@ -344,9 +398,7 @@ void main()
 	if(albedo.a < u_alpha_cutoff)
 		discard;
 
-	// Sample normal map and perturb normal for tangent space
-	vec3 normal_pixel = vec3(0.5, 0.5, 1.0); // default normal
-
+	vec3 normal_pixel = vec3(0.5, 0.5, 1.0);
 	if (textureSize(u_normalmap, 0).x > 1)
 		normal_pixel = texture(u_normalmap, v_uv).xyz;
 
@@ -354,12 +406,25 @@ void main()
 	vec3 N = perturbNormal(normalize(v_normal), v_world_position, v_uv, normal_pixel);
 	vec3 V = normalize(u_camera_pos - v_world_position);
 
-	// Ambient (indirect) - simple approximation
-	vec3 ambient = 0.1 * albedo.rgb;
-	vec3 total_diffuse = vec3(0.0);
-	vec3 total_specular = vec3(0.0);
+	float ao = 1.0;
+	float roughness = u_roughness_factor;
+	float metallic = u_metallic_factor;
+	if (u_has_metallic_roughness)
+	{
+		vec3 mr = texture(u_metallic_roughness, v_uv).rgb;
+		ao = mr.r;
+		roughness = max(mr.g * u_roughness_factor, 0.05);
+		metallic = mr.b * u_metallic_factor;
+	}
+	else
+	{
+		roughness = max(u_roughness_factor, 0.05);
+		metallic = clamp(u_metallic_factor, 0.0, 1.0);
+	}
 
-	// Iterate through all lights
+	vec3 ambient = vec3(0.03) * albedo.rgb * ao;
+	vec3 direct = vec3(0.0);
+
 	for (int i = 0; i < MAX_LIGHTS; i++)
 	{
 		if (i >= u_num_lights)
@@ -370,61 +435,42 @@ void main()
 
 		if (u_light_type[i] == LIGHT_DIRECTIONAL)
 		{
-			// Directional light: use direction, no attenuation
-			light_dir = normalize(-u_light_dir[i]); // Direction points FROM light TO scene
+			light_dir = normalize(-u_light_dir[i]);
 		}
 		else if (u_light_type[i] == LIGHT_SPOT)
 		{
-			// Spot light: calculate direction from position
 			vec3 L = u_light_pos[i] - v_world_position;
 			float dist = length(L);
-			light_dir = L / dist;
+			light_dir = L / max(dist, PBR_EPSILON);
 
-			// Check if light is within range
 			if (dist > u_light_max[i] || dist < u_light_near[i])
 				continue;
 
 			float cos_inner = cos(u_light_cone[i].x);
 			float cos_outer = cos(u_light_cone[i].y);
 			float spot_effect = dot(-light_dir, normalize(u_light_dir[i]));
-
-			// El coseno exterior es MENOR que el interior (ej. cos(45º) < cos(10º))
 			if (spot_effect < cos_outer)
 				continue;
 
-			// Interpolar entre el cono exterior y el interior
-			float spot_atten = clamp((spot_effect - cos_outer) / (cos_inner - cos_outer), 0.0, 1.0);
-
-			// Atenuación final (distancia + cono)
-			attenuation = spot_atten / (dist * dist);
-
+			float spot_atten = clamp((spot_effect - cos_outer) / max(cos_inner - cos_outer, PBR_EPSILON), 0.0, 1.0);
+			attenuation = spot_atten / max(dist * dist, PBR_EPSILON);
 		}
-		else // LIGHT_POINT
+		else
 		{
-			// Point light: calculate direction from position
 			vec3 L = u_light_pos[i] - v_world_position;
 			float dist = length(L);
-			light_dir = L / dist;
+			light_dir = L / max(dist, PBR_EPSILON);
 
-			// Check if light is within range
 			if (dist > u_light_max[i] || dist < u_light_near[i])
 				continue;
 
-			// Quadratic attenuation
-			attenuation = 1.0 / (dist * dist);
+			attenuation = 1.0 / max(dist * dist, PBR_EPSILON);
 		}
 
-		// Diffuse - invariant to camera position
-		float diff = max(dot(N, light_dir), 0.0);
-		total_diffuse += diff * albedo.rgb * u_light_color[i] * u_light_intensity[i] * attenuation;
-
-		// Specular - dependent on view position
-		vec3 R = reflect(-light_dir, N);
-		float spec = pow(max(dot(V, R), 0.0), u_shininess);
-		total_specular += spec * u_light_color[i] * u_light_intensity[i] * attenuation;
+		vec3 radiance = u_light_color[i] * u_light_intensity[i] * attenuation;
+		direct += BRDF_PBR(N, V, light_dir, albedo.rgb, metallic, roughness) * radiance;
 	}
 
-	// Apply shadow factor to lighting
 	float shadow_factor = 1.0;
 	if (u_shadow_count > 0)
 	{
@@ -436,9 +482,7 @@ void main()
 		shadow_factor = total_visibility / float(u_shadow_count);
 	}
 
-	// Final color: ambient + diffuse + specular (with shadow)
-	vec3 final_color = ambient + (total_diffuse + total_specular) * shadow_factor;
-
+	vec3 final_color = ambient + direct * shadow_factor;
 	FragColor = vec4(final_color, albedo.a);
 }
 
@@ -506,11 +550,16 @@ in vec2 v_uv;
 uniform vec4 u_color;
 uniform sampler2D u_texture;
 uniform sampler2D u_normalmap;
-uniform float u_alpha_cutoff;
+uniform sampler2D u_metallic_roughness;
 uniform bool u_has_normalmap;
+uniform bool u_has_metallic_roughness;
+uniform float u_metallic_factor;
+uniform float u_roughness_factor;
+uniform float u_alpha_cutoff;
 
 layout(location = 0) out vec4 gbuffer_albedo;
 layout(location = 1) out vec4 gbuffer_normal;
+layout(location = 2) out vec4 gbuffer_metallic_roughness;
 
 mat3 cotangent_frame(vec3 N, vec3 p, vec2 uv)
 {
@@ -545,8 +594,20 @@ void main()
 		N = perturbNormal(N, v_world_position, v_uv, normal_pixel);
 	}
 
+	float ao = 1.0;
+	float roughness = u_roughness_factor;
+	float metallic = u_metallic_factor;
+	if (u_has_metallic_roughness)
+	{
+		vec3 mr = texture(u_metallic_roughness, v_uv).rgb;
+		ao = mr.r;
+		roughness = mr.g;
+		metallic = mr.b;
+	}
+
 	gbuffer_albedo = color;
 	gbuffer_normal = vec4(N * 0.5 + 0.5, 1.0);
+	gbuffer_metallic_roughness = vec4(ao, roughness, metallic, 1.0);
 }
 
 \deferred_ambient.fs
@@ -555,11 +616,13 @@ void main()
 
 uniform sampler2D u_gbuffer_color;
 uniform sampler2D u_gbuffer_normal;
+uniform sampler2D u_gbuffer_metallic_roughness;
 uniform sampler2D u_gbuffer_depth;
 uniform vec2 u_res_inv;
 uniform mat4 u_inv_vp_mat;
 uniform vec3 u_camera_pos;
 uniform vec3 u_ambient_light;
+#include "brdf"
 
 uniform sampler2D u_shadowmap0;
 uniform sampler2D u_shadowmap1;
@@ -629,6 +692,10 @@ void main()
 
 	vec4 albedo = texture(u_gbuffer_color, uv);
 	vec3 N = normalize(texture(u_gbuffer_normal, uv).xyz * 2.0 - 1.0);
+	vec3 mr = texture(u_gbuffer_metallic_roughness, uv).rgb;
+	float ao = mr.r;
+	float roughness = max(mr.g, 0.05);
+	float metallic = mr.b;
 	vec3 world_pos = reconstructWorldPosition(uv, depth);
 	vec3 V = normalize(u_camera_pos - world_pos);
 	vec3 direct = vec3(0.0);
@@ -641,13 +708,12 @@ void main()
 			continue;
 
 		vec3 L = normalize(-u_light_dir[i]);
-		float diff = max(dot(N, L), 0.0);
-		vec3 R = reflect(-L, N);
-		float spec = pow(max(dot(V, R), 0.0), 32.0);
-		direct += (diff * albedo.rgb + spec) * u_light_color[i] * u_light_intensity[i];
+		vec3 radiance = u_light_color[i] * u_light_intensity[i];
+		direct += BRDF_PBR(N, V, L, albedo.rgb, metallic, roughness) * radiance;
 	}
 
-	FragColor = vec4(albedo.rgb * u_ambient_light + direct * getShadowFactor(world_pos), albedo.a);
+	vec3 ambient = albedo.rgb * u_ambient_light * ao;
+	FragColor = vec4(ambient + direct * getShadowFactor(world_pos), albedo.a);
 }
 
 \deferred_light_volume.fs
@@ -656,10 +722,12 @@ void main()
 
 uniform sampler2D u_gbuffer_color;
 uniform sampler2D u_gbuffer_normal;
+uniform sampler2D u_gbuffer_metallic_roughness;
 uniform sampler2D u_gbuffer_depth;
 uniform vec2 u_res_inv;
 uniform mat4 u_inv_vp_mat;
 uniform vec3 u_camera_pos;
+#include "brdf"
 
 uniform sampler2D u_shadowmap0;
 uniform sampler2D u_shadowmap1;
@@ -738,6 +806,9 @@ void main()
 
 	vec4 albedo = texture(u_gbuffer_color, uv);
 	vec3 N = normalize(texture(u_gbuffer_normal, uv).xyz * 2.0 - 1.0);
+	vec3 mr = texture(u_gbuffer_metallic_roughness, uv).rgb;
+	float roughness = max(mr.g, 0.05);
+	float metallic = mr.b;
 	vec3 world_pos = reconstructWorldPosition(uv, depth);
 	vec3 V = normalize(u_camera_pos - world_pos);
 
@@ -746,7 +817,7 @@ void main()
 	if(dist > u_light_max[i] || dist < u_light_near[i])
 		discard;
 
-	vec3 L = light_vec / dist;
+	vec3 L = light_vec / max(dist, PBR_EPSILON);
 	float attenuation = 1.0 / (1.0 + 0.09 * dist + 0.032 * dist * dist);
 
 	if(u_light_type[i] == LIGHT_SPOT)
@@ -756,13 +827,11 @@ void main()
 		float spot_effect = dot(L, normalize(u_light_dir[i]));
 		if(spot_effect < cos_outer)
 			discard;
-		attenuation *= clamp((spot_effect - cos_outer) / (cos_inner - cos_outer), 0.0, 1.0);
+		attenuation *= clamp((spot_effect - cos_outer) / max(cos_inner - cos_outer, PBR_EPSILON), 0.0, 1.0);
 	}
 
-	float diff = max(dot(N, L), 0.0);
-	vec3 R = reflect(-L, N);
-	float spec = pow(max(dot(V, R), 0.0), 32.0);
-	vec3 color = (diff * albedo.rgb + spec) * u_light_color[i] * u_light_intensity[i] * attenuation;
+	vec3 radiance = u_light_color[i] * u_light_intensity[i] * attenuation;
+	vec3 color = BRDF_PBR(N, V, L, albedo.rgb, metallic, roughness) * radiance;
 	FragColor = vec4(color * getShadowFactor(world_pos), 1.0);
 }
 
