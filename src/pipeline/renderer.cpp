@@ -1,6 +1,7 @@
 #include "renderer.h"
 
 #include <algorithm> //sort
+#include <random>
 
 #include "camera.h"
 #include "../gfx/gfx.h"
@@ -67,10 +68,16 @@ Renderer::Renderer(const char* shader_atlas_filename)
 	shadow_bias = 0.001f;
 
 	multipass_rendering = false;
+	ssao_enabled = true;
+	ssao_hemisphere = true;
+	ssao_num_samples = 32;
+	ssao_sample_radius = 0.05f;
+	ssao_fbo_scale = 1.0f;
 	scene = nullptr;
 	skybox_cubemap = nullptr;
 	gbuffer_fbo = new GFX::FBO();
 	lighting_fbo = new GFX::FBO();
+	ssao_fbo = new GFX::FBO();
 
    // 3.5: Reset per-frame shadow containers
 	shadow_viewprojections.clear();
@@ -79,6 +86,8 @@ Renderer::Renderer(const char* shader_atlas_filename)
 	if (!GFX::Shader::LoadAtlas(shader_atlas_filename))
 		exit(1);
 	GFX::checkGLErrors();
+
+	generateSSAOSamples(ssao_hemisphere);
 
 	// 3.1: Create depth shadow map FBOs
 	shadowmap_fbos.resize(MAX_SHADOW_LIGHTS);
@@ -196,6 +205,46 @@ void Renderer::updateDeferredFBOs()
 		gbuffer_fbo->create(window_size.x, window_size.y, 3, GL_RGBA, GL_UNSIGNED_BYTE, true);
 		lighting_fbo->create(window_size.x, window_size.y, 1, GL_RGBA, GL_UNSIGNED_BYTE, true);
 	}
+
+	int ssao_width = (int)(window_size.x * ssao_fbo_scale);
+	int ssao_height = (int)(window_size.y * ssao_fbo_scale);
+	if (ssao_width < 1) ssao_width = 1;
+	if (ssao_height < 1) ssao_height = 1;
+	if (!ssao_fbo->fbo_id || ssao_fbo->width != ssao_width || ssao_fbo->height != ssao_height)
+		ssao_fbo->create(ssao_width, ssao_height, 1, GL_RGBA, GL_UNSIGNED_BYTE, false);
+}
+
+void Renderer::generateSSAOSamples(bool hemisphere)
+{
+	const int max_samples = 64;
+	ssao_samples.clear();
+	ssao_samples.reserve(max_samples * 3);
+
+	std::mt19937 generator(13u);
+	std::uniform_real_distribution<float> random_float(0.0f, 1.0f);
+
+	for (int i = 0; i < max_samples; ++i)
+	{
+		Vector3f sample(
+			random_float(generator) * 2.0f - 1.0f,
+			random_float(generator) * 2.0f - 1.0f,
+			hemisphere ? random_float(generator) : random_float(generator) * 2.0f - 1.0f
+		);
+
+		if (sample.length() < 0.0001f)
+			sample = Vector3f(0.0f, 0.0f, 1.0f);
+
+		sample.normalize();
+		sample *= random_float(generator);
+
+		float scale = i / (float)max_samples;
+		scale = 0.1f + 0.9f * scale * scale;
+		sample *= scale;
+
+		ssao_samples.push_back(sample.x);
+		ssao_samples.push_back(sample.y);
+		ssao_samples.push_back(sample.z);
+	}
 }
 
 void Renderer::renderDeferred(Camera* camera)
@@ -216,6 +265,8 @@ void Renderer::renderDeferred(Camera* camera)
 	}
 
 	gbuffer_fbo->unbind();
+
+	renderSSAO(camera);
 
 	gbuffer_fbo->depth_texture->copyTo(lighting_fbo->depth_texture);
 	lighting_fbo->bind();
@@ -630,6 +681,8 @@ void Renderer::renderDeferredAmbient(Camera* camera)
 	shader->setUniform("u_gbuffer_normal", gbuffer_fbo->color_textures[1], 1);
 	shader->setUniform("u_gbuffer_metallic_roughness", gbuffer_fbo->color_textures[2], 2);
 	shader->setUniform("u_gbuffer_depth", gbuffer_fbo->depth_texture, 3);
+	shader->setUniform("u_ssao_texture", ssao_fbo->color_textures[0], 8);
+	shader->setUniform("u_ssao_enabled", ssao_enabled);
 	shader->setUniform("u_res_inv", res_inv);
 	shader->setUniform("u_inv_vp_mat", camera->inverse_viewprojection_matrix);
 	shader->setUniform("u_camera_pos", camera->eye);
@@ -638,6 +691,45 @@ void Renderer::renderDeferredAmbient(Camera* camera)
 	sendShadowUniforms(shader, 4);
 	quad->render(GL_TRIANGLES);
 	shader->disable();
+}
+
+void Renderer::renderSSAO(Camera* camera)
+{
+	if (!ssao_fbo || !ssao_fbo->fbo_id)
+		return;
+
+	GFX::Shader* shader = GFX::Shader::Get("ssao");
+	GFX::Mesh* quad = GFX::Mesh::getQuad();
+	if (!shader || !quad)
+		return;
+
+	Vector2f gbuffer_res_inv(1.0f / gbuffer_fbo->width, 1.0f / gbuffer_fbo->height);
+	Vector2f ssao_res_inv(1.0f / ssao_fbo->width, 1.0f / ssao_fbo->height);
+
+	ssao_fbo->bind();
+	glClearColor(1.0, 1.0, 1.0, 1.0);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+	glDisable(GL_CULL_FACE);
+
+	shader->enable();
+	shader->setUniform("u_gbuffer_normal", gbuffer_fbo->color_textures[1], 0);
+	shader->setUniform("u_gbuffer_depth", gbuffer_fbo->depth_texture, 1);
+	shader->setUniform("u_res_inv", gbuffer_res_inv);
+	shader->setUniform("u_ssao_res_inv", ssao_res_inv);
+	shader->setUniform("u_inv_vp_mat", camera->inverse_viewprojection_matrix);
+	shader->setUniform("u_viewprojection", camera->viewprojection_matrix);
+	int active_samples = ssao_num_samples > 64 ? 64 : ssao_num_samples;
+	shader->setUniform("u_num_samples", active_samples);
+	shader->setUniform("u_sample_radius", ssao_sample_radius);
+	shader->setUniform("u_hemisphere", ssao_hemisphere);
+	if (!ssao_samples.empty())
+		shader->setUniform3Array("u_samples", &ssao_samples[0], (int)ssao_samples.size() / 3);
+	quad->render(GL_TRIANGLES);
+	shader->disable();
+
+	ssao_fbo->unbind();
 }
 
 void Renderer::renderDeferredLightVolumes(Camera* camera)
@@ -708,6 +800,20 @@ void Renderer::showUI()
 	//add here your stuff
 	//...
 	ImGui::Checkbox("Deferred Rendering", &multipass_rendering);
+	ImGui::Separator();
+	ImGui::Checkbox("SSAO", &ssao_enabled);
+	if (ImGui::Checkbox("SSAO+ Hemisphere", &ssao_hemisphere))
+		generateSSAOSamples(ssao_hemisphere);
+	ImGui::SliderInt("SSAO Samples", &ssao_num_samples, 1, 64);
+	ImGui::DragFloat("SSAO Radius", &ssao_sample_radius, 0.005f, 0.001f, 1.0f);
+	ImGui::SliderFloat("SSAO Resolution", &ssao_fbo_scale, 0.25f, 1.0f);
+	if (ssao_fbo && ssao_fbo->color_textures[0] && ImGui::TreeNode("SSAO Texture"))
+	{
+		float width = ImGui::GetColumnWidth();
+		float aspect = ssao_fbo->height > 0 ? ssao_fbo->width / (float)ssao_fbo->height : 1.0f;
+		ImGui::Image((void*)(intptr_t)(ssao_fbo->color_textures[0]->texture_id), ImVec2(width, width / aspect));
+		ImGui::TreePop();
+	}
 }
 
 #else

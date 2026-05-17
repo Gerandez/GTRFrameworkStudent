@@ -40,10 +40,17 @@ namespace SCN {
 		bool shadow_front_face_culling;
 		float shadow_bias;
 		bool multipass_rendering;
+		bool ssao_enabled;
+		bool ssao_hemisphere;
+		int ssao_num_samples;
+		float ssao_sample_radius;
+		float ssao_fbo_scale;
+		std::vector<float> ssao_samples;
 
 		GFX::Texture* skybox_cubemap;
 		GFX::FBO* gbuffer_fbo;
 		GFX::FBO* lighting_fbo;
+		GFX::FBO* ssao_fbo;
       // 3.1 + 3.5
         std::vector<GFX::FBO*> shadowmap_fbos;
       // 3.5: Data consumed by the shading pass
@@ -82,6 +89,8 @@ namespace SCN {
 		void renderDeferred(Camera* camera);
 		void renderDeferredAmbient(Camera* camera);
 		void renderDeferredLightVolumes(Camera* camera);
+		void renderSSAO(Camera* camera);
+		void generateSSAOSamples(bool hemisphere);
 		void sendLightUniforms(GFX::Shader* shader);
 		void sendShadowUniforms(GFX::Shader* shader, int first_slot = 3);
 		void updateDeferredFBOs();

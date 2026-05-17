@@ -7,6 +7,7 @@ depth quad.vs depth.fs
 multi basic.vs multi.fs
 phong basic.vs phong.fs
 gbuffer basic.vs gbuffer.fs
+ssao quad.vs ssao.fs
 deferred_ambient quad.vs deferred_ambient.fs
 deferred_light_volume basic.vs deferred_light_volume.fs
 
@@ -618,6 +619,8 @@ uniform sampler2D u_gbuffer_color;
 uniform sampler2D u_gbuffer_normal;
 uniform sampler2D u_gbuffer_metallic_roughness;
 uniform sampler2D u_gbuffer_depth;
+uniform sampler2D u_ssao_texture;
+uniform bool u_ssao_enabled;
 uniform vec2 u_res_inv;
 uniform mat4 u_inv_vp_mat;
 uniform vec3 u_camera_pos;
@@ -694,6 +697,8 @@ void main()
 	vec3 N = normalize(texture(u_gbuffer_normal, uv).xyz * 2.0 - 1.0);
 	vec3 mr = texture(u_gbuffer_metallic_roughness, uv).rgb;
 	float ao = mr.r;
+	if(u_ssao_enabled)
+		ao *= texture(u_ssao_texture, uv).r;
 	float roughness = max(mr.g, 0.05);
 	float metallic = mr.b;
 	vec3 world_pos = reconstructWorldPosition(uv, depth);
@@ -714,6 +719,84 @@ void main()
 
 	vec3 ambient = albedo.rgb * u_ambient_light * ao;
 	FragColor = vec4(ambient + direct * getShadowFactor(world_pos), albedo.a);
+}
+
+\ssao.fs
+
+#version 330 core
+
+uniform sampler2D u_gbuffer_normal;
+uniform sampler2D u_gbuffer_depth;
+uniform vec2 u_res_inv;
+uniform vec2 u_ssao_res_inv;
+uniform mat4 u_inv_vp_mat;
+uniform mat4 u_viewprojection;
+uniform vec3 u_samples[64];
+uniform int u_num_samples;
+uniform float u_sample_radius;
+uniform bool u_hemisphere;
+
+out vec4 FragColor;
+
+vec3 reconstructWorldPosition(vec2 uv, float depth)
+{
+	vec4 clip_coords = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+	vec4 world_pos = u_inv_vp_mat * clip_coords;
+	return world_pos.xyz / world_pos.w;
+}
+
+mat3 buildNormalBasis(vec3 N)
+{
+	vec3 v = vec3(0.0, 1.0, 0.0);
+	if(abs(dot(v, N)) > 0.99)
+		v = vec3(1.0, 0.0, 0.0);
+
+	vec3 T = normalize(v - N * dot(v, N));
+	vec3 B = cross(N, T);
+	return mat3(T, B, N);
+}
+
+void main()
+{
+	vec2 uv = gl_FragCoord.xy * u_ssao_res_inv;
+	float depth = texture(u_gbuffer_depth, uv).r;
+	if(depth >= 0.999999)
+	{
+		FragColor = vec4(1.0);
+		return;
+	}
+
+	vec3 world_pos = reconstructWorldPosition(uv, depth);
+	vec3 normal = normalize(texture(u_gbuffer_normal, uv).xyz * 2.0 - 1.0);
+	mat3 rotmat = buildNormalBasis(normal);
+
+	float occlusion = 0.0;
+	for(int i = 0; i < 64; ++i)
+	{
+		if(i >= u_num_samples)
+			break;
+
+		vec3 sample_dir = u_samples[i];
+		if(u_hemisphere)
+			sample_dir = rotmat * sample_dir;
+
+		vec3 sample_pos = world_pos + sample_dir * u_sample_radius;
+		vec4 projected_sample = u_viewprojection * vec4(sample_pos, 1.0);
+		vec3 sample_ndc = projected_sample.xyz / projected_sample.w;
+
+		if(sample_ndc.x < -1.0 || sample_ndc.x > 1.0 || sample_ndc.y < -1.0 || sample_ndc.y > 1.0 || sample_ndc.z < -1.0 || sample_ndc.z > 1.0)
+			continue;
+
+		vec2 sample_uv = sample_ndc.xy * 0.5 + 0.5;
+		float sample_depth = texture(u_gbuffer_depth, sample_uv).r;
+		float sample_depth_projected = sample_ndc.z * 0.5 + 0.5;
+
+		if(sample_depth < sample_depth_projected - 0.001)
+			occlusion += 1.0;
+	}
+
+	float ao = 1.0 - occlusion / max(float(u_num_samples), 1.0);
+	FragColor = vec4(vec3(ao), 1.0);
 }
 
 \deferred_light_volume.fs
