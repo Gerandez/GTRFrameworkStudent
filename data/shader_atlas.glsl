@@ -932,13 +932,13 @@ void main()
 		discard;
 
 	vec3 L = light_vec / max(dist, PBR_EPSILON);
-	float attenuation = 1.0 / (1.0 + 0.09 * dist + 0.032 * dist * dist);
+	float attenuation = 1.0 / max(dist * dist, PBR_EPSILON);
 
 	if(u_light_type[i] == LIGHT_SPOT)
 	{
 		float cos_inner = cos(u_light_cone[i].x);
 		float cos_outer = cos(u_light_cone[i].y);
-		float spot_effect = dot(L, normalize(u_light_dir[i]));
+		float spot_effect = dot(-L, normalize(u_light_dir[i]));
 		if(spot_effect < cos_outer)
 			discard;
 		attenuation *= clamp((spot_effect - cos_outer) / max(cos_inner - cos_outer, PBR_EPSILON), 0.0, 1.0);
