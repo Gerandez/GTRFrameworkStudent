@@ -73,6 +73,8 @@ Renderer::Renderer(const char* shader_atlas_filename)
 	ssao_num_samples = 32;
 	ssao_sample_radius = 0.05f;
 	ssao_fbo_scale = 1.0f;
+	tonemap_enabled = true;
+	tonemap_exposure = 1.0f;
 	scene = nullptr;
 	skybox_cubemap = nullptr;
 	gbuffer_fbo = new GFX::FBO();
@@ -203,7 +205,7 @@ void Renderer::updateDeferredFBOs()
 	if (!gbuffer_fbo->fbo_id || gbuffer_fbo->width != (int)window_size.x || gbuffer_fbo->height != (int)window_size.y)
 	{
 		gbuffer_fbo->create(window_size.x, window_size.y, 3, GL_RGBA, GL_UNSIGNED_BYTE, true);
-		lighting_fbo->create(window_size.x, window_size.y, 1, GL_RGBA, GL_UNSIGNED_BYTE, true);
+		lighting_fbo->create(window_size.x, window_size.y, 1, GL_RGBA, GL_HALF_FLOAT, true);
 	}
 
 	int ssao_width = (int)(window_size.x * ssao_fbo_scale);
@@ -283,7 +285,7 @@ void Renderer::renderDeferred(Camera* camera)
 	glClearColor(scene->background_color.x, scene->background_color.y, scene->background_color.z, 1.0);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	lighting_fbo->color_textures[0]->toViewport();
+	renderTonemap();
 	gbuffer_fbo->depth_texture->copyTo(NULL);
 
 	for (size_t i = 0; i < render_calls.size(); ++i)
@@ -732,6 +734,27 @@ void Renderer::renderSSAO(Camera* camera)
 	ssao_fbo->unbind();
 }
 
+void Renderer::renderTonemap()
+{
+	GFX::Shader* shader = GFX::Shader::Get("tonemap");
+	if (!shader || !lighting_fbo || !lighting_fbo->color_textures[0])
+	{
+		lighting_fbo->color_textures[0]->toViewport();
+		return;
+	}
+
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+	glDisable(GL_CULL_FACE);
+
+	shader->enable();
+	shader->setUniform("u_texture", lighting_fbo->color_textures[0], 0);
+	shader->setUniform("u_exposure", tonemap_exposure);
+	shader->setUniform("u_enabled", tonemap_enabled);
+	GFX::Mesh::getQuad()->render(GL_TRIANGLES);
+	shader->disable();
+}
+
 void Renderer::renderDeferredLightVolumes(Camera* camera)
 {
 	GFX::Shader* shader = GFX::Shader::Get("deferred_light_volume");
@@ -814,6 +837,9 @@ void Renderer::showUI()
 		ImGui::Image((void*)(intptr_t)(ssao_fbo->color_textures[0]->texture_id), ImVec2(width, width / aspect));
 		ImGui::TreePop();
 	}
+	ImGui::Separator();
+	ImGui::Checkbox("Tonemap", &tonemap_enabled);
+	ImGui::DragFloat("Exposure", &tonemap_exposure, 0.05f, 0.01f, 10.0f);
 }
 
 #else

@@ -8,8 +8,31 @@ multi basic.vs multi.fs
 phong basic.vs phong.fs
 gbuffer basic.vs gbuffer.fs
 ssao quad.vs ssao.fs
+tonemap quad.vs tonemap.fs
 deferred_ambient quad.vs deferred_ambient.fs
 deferred_light_volume basic.vs deferred_light_volume.fs
+
+\color_space
+
+vec3 degamma(vec3 color)
+{
+	return pow(max(color, vec3(0.0)), vec3(2.2));
+}
+
+vec3 gamma(vec3 color)
+{
+	return pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+}
+
+vec3 tonemapACES(vec3 color)
+{
+	const float a = 2.51;
+	const float b = 0.03;
+	const float c = 2.43;
+	const float d = 0.59;
+	const float e = 0.14;
+	return clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
+}
 
 \perturbNormal
 
@@ -336,6 +359,7 @@ uniform mat4 u_light_viewprojection[4];
 
 #include "perturbNormal"
 #include "brdf"
+#include "color_space"
 
 // Shadow map functions
 float readShadowDepth(int idx, vec2 uv)
@@ -395,6 +419,7 @@ void main()
 	vec2 uv = v_uv;
 	vec4 albedo = u_color;
 	albedo *= texture(u_texture, v_uv);
+	albedo.rgb = degamma(albedo.rgb);
 
 	if(albedo.a < u_alpha_cutoff)
 		discard;
@@ -468,7 +493,7 @@ void main()
 			attenuation = 1.0 / max(dist * dist, PBR_EPSILON);
 		}
 
-		vec3 radiance = u_light_color[i] * u_light_intensity[i] * attenuation;
+		vec3 radiance = degamma(u_light_color[i]) * u_light_intensity[i] * attenuation;
 		direct += BRDF_PBR(N, V, light_dir, albedo.rgb, metallic, roughness) * radiance;
 	}
 
@@ -484,7 +509,7 @@ void main()
 	}
 
 	vec3 final_color = ambient + direct * shadow_factor;
-	FragColor = vec4(final_color, albedo.a);
+	FragColor = vec4(gamma(final_color), albedo.a);
 }
 
 
@@ -562,6 +587,8 @@ layout(location = 0) out vec4 gbuffer_albedo;
 layout(location = 1) out vec4 gbuffer_normal;
 layout(location = 2) out vec4 gbuffer_metallic_roughness;
 
+#include "color_space"
+
 mat3 cotangent_frame(vec3 N, vec3 p, vec2 uv)
 {
 	vec3 dp1 = dFdx(p);
@@ -587,6 +614,7 @@ void main()
 	vec4 color = u_color * texture(u_texture, v_uv);
 	if(color.a < u_alpha_cutoff)
 		discard;
+	color.rgb = degamma(color.rgb);
 
 	vec3 N = normalize(v_normal);
 	if(u_has_normalmap)
@@ -626,6 +654,7 @@ uniform mat4 u_inv_vp_mat;
 uniform vec3 u_camera_pos;
 uniform vec3 u_ambient_light;
 #include "brdf"
+#include "color_space"
 
 uniform sampler2D u_shadowmap0;
 uniform sampler2D u_shadowmap1;
@@ -713,11 +742,11 @@ void main()
 			continue;
 
 		vec3 L = normalize(-u_light_dir[i]);
-		vec3 radiance = u_light_color[i] * u_light_intensity[i];
+		vec3 radiance = degamma(u_light_color[i]) * u_light_intensity[i];
 		direct += BRDF_PBR(N, V, L, albedo.rgb, metallic, roughness) * radiance;
 	}
 
-	vec3 ambient = albedo.rgb * u_ambient_light * ao;
+	vec3 ambient = albedo.rgb * degamma(u_ambient_light) * ao;
 	FragColor = vec4(ambient + direct * getShadowFactor(world_pos), albedo.a);
 }
 
@@ -837,6 +866,8 @@ uniform vec2 u_light_cone[MAX_LIGHTS];
 
 out vec4 FragColor;
 
+#include "color_space"
+
 vec3 reconstructWorldPosition(vec2 uv, float depth)
 {
 	vec4 clip_coords = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
@@ -913,11 +944,33 @@ void main()
 		attenuation *= clamp((spot_effect - cos_outer) / max(cos_inner - cos_outer, PBR_EPSILON), 0.0, 1.0);
 	}
 
-	vec3 radiance = u_light_color[i] * u_light_intensity[i] * attenuation;
+	vec3 radiance = degamma(u_light_color[i]) * u_light_intensity[i] * attenuation;
 	vec3 color = BRDF_PBR(N, V, L, albedo.rgb, metallic, roughness) * radiance;
 	FragColor = vec4(color * getShadowFactor(world_pos), 1.0);
 }
 
+
+\tonemap.fs
+
+#version 330 core
+
+uniform sampler2D u_texture;
+uniform float u_exposure;
+uniform bool u_enabled;
+
+in vec2 v_uv;
+out vec4 FragColor;
+
+#include "color_space"
+
+void main()
+{
+	vec4 hdr_color = texture(u_texture, v_uv);
+	vec3 color = hdr_color.rgb * u_exposure;
+	if(u_enabled)
+		color = tonemapACES(color);
+	FragColor = vec4(gamma(color), hdr_color.a);
+}
 
 \depth.fs
 

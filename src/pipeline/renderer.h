@@ -46,6 +46,8 @@ namespace SCN {
 		float ssao_sample_radius;
 		float ssao_fbo_scale;
 		std::vector<float> ssao_samples;
+		bool tonemap_enabled;
+		float tonemap_exposure;
 
 		GFX::Texture* skybox_cubemap;
 		GFX::FBO* gbuffer_fbo;
@@ -90,6 +92,7 @@ namespace SCN {
 		void renderDeferredAmbient(Camera* camera);
 		void renderDeferredLightVolumes(Camera* camera);
 		void renderSSAO(Camera* camera);
+		void renderTonemap();
 		void generateSSAOSamples(bool hemisphere);
 		void sendLightUniforms(GFX::Shader* shader);
 		void sendShadowUniforms(GFX::Shader* shader, int first_slot = 3);
