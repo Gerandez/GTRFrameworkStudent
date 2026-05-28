@@ -40,6 +40,7 @@ namespace SCN {
 		bool shadow_front_face_culling;
 		float shadow_bias;
 		bool multipass_rendering;
+		bool deferred_light_volumes_enabled;
 		bool ssao_enabled;
 		bool ssao_hemisphere;
 		int ssao_num_samples;

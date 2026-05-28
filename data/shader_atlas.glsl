@@ -630,8 +630,13 @@ void main()
 	{
 		vec3 mr = texture(u_metallic_roughness, v_uv).rgb;
 		ao = mr.r;
-		roughness = mr.g;
-		metallic = mr.b;
+		roughness = max(mr.g * u_roughness_factor, 0.05);
+		metallic = mr.b * u_metallic_factor;
+	}
+	else
+	{
+		roughness = max(u_roughness_factor, 0.05);
+		metallic = clamp(u_metallic_factor, 0.0, 1.0);
 	}
 
 	gbuffer_albedo = color;

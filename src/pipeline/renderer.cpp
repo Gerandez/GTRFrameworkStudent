@@ -68,6 +68,7 @@ Renderer::Renderer(const char* shader_atlas_filename)
 	shadow_bias = 0.001f;
 
 	multipass_rendering = false;
+	deferred_light_volumes_enabled = false;
 	ssao_enabled = true;
 	ssao_hemisphere = true;
 	ssao_num_samples = 32;
@@ -279,7 +280,8 @@ void Renderer::renderDeferred(Camera* camera)
 		renderSkybox(skybox_cubemap);
 
 	renderDeferredAmbient(camera);
-	renderDeferredLightVolumes(camera);
+	if (deferred_light_volumes_enabled)
+		renderDeferredLightVolumes(camera);
 	lighting_fbo->unbind();
 
 	glClearColor(scene->background_color.x, scene->background_color.y, scene->background_color.z, 1.0);
@@ -641,7 +643,7 @@ void Renderer::sendLightUniforms(GFX::Shader* shader)
 		light_pos_array[i * 3 + 1] = light_world_pos.y;
 		light_pos_array[i * 3 + 2] = light_world_pos.z;
 
-		vec3 light_front = light_model.frontVector();
+		vec3 light_front = light_model.rotateVector(vec3(0.0f, 0.0f, -1.0f));
 		light_dir_array[i * 3 + 0] = light_front.x;
 		light_dir_array[i * 3 + 1] = light_front.y;
 		light_dir_array[i * 3 + 2] = light_front.z;
@@ -823,6 +825,7 @@ void Renderer::showUI()
 	//add here your stuff
 	//...
 	ImGui::Checkbox("Deferred Rendering", &multipass_rendering);
+	ImGui::Checkbox("Deferred Light Volumes", &deferred_light_volumes_enabled);
 	ImGui::Separator();
 	ImGui::Checkbox("SSAO", &ssao_enabled);
 	if (ImGui::Checkbox("SSAO+ Hemisphere", &ssao_hemisphere))
