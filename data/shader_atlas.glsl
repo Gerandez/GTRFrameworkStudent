@@ -11,6 +11,8 @@ ssao quad.vs ssao.fs
 tonemap quad.vs tonemap.fs
 deferred_ambient quad.vs deferred_ambient.fs
 deferred_light_volume basic.vs deferred_light_volume.fs
+glass_refraction phong.vs glass_refraction.fs
+glass_mask basic.vs glass_mask.fs
 
 \color_space
 
@@ -529,6 +531,53 @@ void main()
 	vec3 E = v_world_position - u_camera_position;
 	vec4 color = texture( u_texture, E );
 	FragColor = color;
+}
+
+\glass_refraction.fs
+
+#version 330 core
+
+in vec3 v_world_position;
+in vec3 v_normal;
+in vec2 v_uv;
+
+uniform vec3 u_camera_pos;
+uniform sampler2D u_scene_texture;
+uniform sampler2D u_normalmap;
+uniform vec2 u_resolution;
+uniform float u_refraction_strength;
+uniform vec3 u_glass_tint;
+
+out vec4 FragColor;
+
+void main()
+{
+	vec2 screen_uv = gl_FragCoord.xy / u_resolution;
+
+	vec4 vBumpTex = 2.0 * texture(u_normalmap, v_uv) - 1.0;
+	vec3 vBump = normalize(vBumpTex.xyz * vec3(0.2, 0.2, 1.0));
+
+	vec2 vProj = screen_uv;
+	vec2 bump_offset = vBump.xy * u_refraction_strength;
+	vec4 vRefrA = texture(u_scene_texture, clamp(vProj + bump_offset, 0.001, 0.999));
+	vec4 vRefrB = texture(u_scene_texture, vProj);
+
+	vec4 vFinal = vRefrB * vRefrA.a + vRefrA * (1.0 - vRefrA.a);
+	vec4 vDiffuse = vec4(clamp(0.1 + u_glass_tint * 0.9, 0.0, 1.0), 1.0);
+	vec3 vEye = normalize(u_camera_pos - v_world_position);
+	float edge = pow(1.0 - clamp(dot(normalize(v_normal), vEye), 0.0, 1.0), 4.0);
+	FragColor = vec4((vDiffuse * vFinal).rgb + vec3(0.55, 0.75, 0.9) * edge * 0.18, 1.0);
+}
+
+\glass_mask.fs
+
+#version 330 core
+
+out vec4 FragColor;
+
+void main()
+{
+	FragColor = vec4(0.0);
 }
 
 

@@ -10,6 +10,7 @@ namespace SCN {
 
 	class PrefabEntity;
 	class LightEntity;
+	class GlassRefractionEntity;
 };
 
 class SceneEditor
@@ -32,6 +33,7 @@ public:
 	void inspectEntity(SCN::BaseEntity* entity);
 	void inspectEntity(SCN::PrefabEntity* entity);
 	void inspectEntity(SCN::LightEntity* entity);
+	void inspectEntity(SCN::GlassRefractionEntity* entity);
 	void inspectEntity(SCN::UnknownEntity* entity);
 
 	void renderInList(SCN::BaseEntity* entity);

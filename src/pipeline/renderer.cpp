@@ -76,11 +76,15 @@ Renderer::Renderer(const char* shader_atlas_filename)
 	ssao_fbo_scale = 1.0f;
 	tonemap_enabled = true;
 	tonemap_exposure = 1.0f;
+	glass_refraction_enabled = true;
+	glass_refraction_strength = 1.0f;
 	scene = nullptr;
 	skybox_cubemap = nullptr;
 	gbuffer_fbo = new GFX::FBO();
 	lighting_fbo = new GFX::FBO();
 	ssao_fbo = new GFX::FBO();
+	refraction_fbo = new GFX::FBO();
+	glass_normal_texture = nullptr;
 
    // 3.5: Reset per-frame shadow containers
 	shadow_viewprojections.clear();
@@ -102,6 +106,22 @@ Renderer::Renderer(const char* shader_atlas_filename)
 
 	sphere.createSphere(1.0f);
 	sphere.uploadToVRAM();
+
+	Image glass_normal;
+	glass_normal.resize(64, 64, 3);
+	for (unsigned int y = 0; y < glass_normal.height; ++y)
+	{
+		for (unsigned int x = 0; x < glass_normal.width; ++x)
+		{
+			float fx = x / (float)glass_normal.width - 0.5f;
+			float fy = y / (float)glass_normal.height - 0.5f;
+			float ripple = sinf((fx * 11.0f + fy * 7.0f)) * 0.5f + cosf((fx - fy) * 13.0f) * 0.5f;
+			unsigned char nx = (unsigned char)clamp(128.0f + ripple * 96.0f, 0.0f, 255.0f);
+			unsigned char ny = (unsigned char)clamp(128.0f - ripple * 96.0f, 0.0f, 255.0f);
+			glass_normal.setPixel(x, y, Color(nx, ny, 255, 255));
+		}
+	}
+	glass_normal_texture = new GFX::Texture(&glass_normal);
 }
 
 void Renderer::setupScene()
@@ -121,6 +141,7 @@ void Renderer::parseSceneEntities(SCN::Scene* scene, Camera* cam)
 	// 3.2: Parsing the scene to generate render calls
 	render_calls.clear();
 	enabled_lights.clear();
+	glass_refractions.clear();
 
 	if (!scene)
 		return;
@@ -140,6 +161,10 @@ void Renderer::parseSceneEntities(SCN::Scene* scene, Camera* cam)
 		{
 			LightEntity* light_entity = (LightEntity*)entity;
 			enabled_lights.push_back(light_entity);
+		}
+		else if (entity->getType() == SCN::eEntityType::GLASS_REFRACTION)
+		{
+			glass_refractions.push_back((GlassRefractionEntity*)entity);
 		}
 	}
 }
@@ -180,6 +205,15 @@ void Renderer::renderScene(SCN::Scene* scene, Camera* camera)
 
 void Renderer::renderForward()
 {
+	bool render_glass = glass_refraction_enabled && !glass_refractions.empty();
+
+	if (render_glass)
+		updateRefractionFBO();
+
+	GFX::FBO* target_fbo = render_glass ? refraction_fbo : nullptr;
+	if (target_fbo)
+		target_fbo->bind();
+
 	//set the clear color (the background color)
 	glClearColor(scene->background_color.x, scene->background_color.y, scene->background_color.z, 1.0);
 
@@ -197,7 +231,116 @@ void Renderer::renderForward()
 
 	// 3.3: Render all generated render calls
 	for (size_t i = 0; i < render_calls.size(); ++i)
+	{
+		if (render_glass && render_calls[i].material->alpha_mode == SCN::eAlphaMode::BLEND)
+			continue;
 		renderMeshWithMaterial(render_calls[i].model, render_calls[i].mesh, render_calls[i].material);
+	}
+
+	if (!render_glass)
+		return;
+
+	for (size_t i = 0; i < glass_refractions.size(); ++i)
+		renderGlassMask(Camera::current, glass_refractions[i]);
+
+	refraction_fbo->unbind();
+	blitRefractionFBOToScreen();
+
+	for (size_t i = 0; i < glass_refractions.size(); ++i)
+		renderGlassRefraction(Camera::current, glass_refractions[i], refraction_fbo->color_textures[0]);
+
+	for (size_t i = 0; i < render_calls.size(); ++i)
+	{
+		if (render_calls[i].material->alpha_mode != SCN::eAlphaMode::BLEND)
+			continue;
+		renderMeshWithMaterial(render_calls[i].model, render_calls[i].mesh, render_calls[i].material);
+	}
+}
+
+void Renderer::updateRefractionFBO()
+{
+	Vector2ui window_size = CORE::getWindowSize();
+	if (!refraction_fbo->fbo_id || refraction_fbo->width != (int)window_size.x || refraction_fbo->height != (int)window_size.y)
+		refraction_fbo->create(window_size.x, window_size.y, 1, GL_RGBA, GL_UNSIGNED_BYTE, true);
+}
+
+void Renderer::renderGlassMask(Camera* camera, GlassRefractionEntity* glass)
+{
+	if (!camera || !glass)
+		return;
+
+	GFX::Shader* shader = GFX::Shader::Get("glass_mask");
+	if (!shader)
+		return;
+
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(GL_FALSE);
+	glDisable(GL_BLEND);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+	glColorMask(false, false, false, true);
+
+	shader->enable();
+	shader->setUniform("u_model", glass->root.model);
+	shader->setUniform("u_viewprojection", camera->viewprojection_matrix);
+	sphere.render(GL_TRIANGLES);
+	shader->disable();
+
+	glColorMask(true, true, true, true);
+	glDepthMask(GL_TRUE);
+}
+
+void Renderer::blitRefractionFBOToScreen()
+{
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, refraction_fbo->fbo_id);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+	glBlitFramebuffer(0, 0, refraction_fbo->width, refraction_fbo->height, 0, 0, refraction_fbo->width, refraction_fbo->height, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+}
+
+void Renderer::blitScreenToRefractionFBO()
+{
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, refraction_fbo->fbo_id);
+	glBlitFramebuffer(0, 0, refraction_fbo->width, refraction_fbo->height, 0, 0, refraction_fbo->width, refraction_fbo->height, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+}
+
+void Renderer::renderGlassRefraction(Camera* camera, GlassRefractionEntity* glass, GFX::Texture* scene_texture)
+{
+	if (!camera || !glass || !scene_texture)
+		return;
+
+	GFX::Shader* shader = GFX::Shader::Get("glass_refraction");
+	if (!shader)
+		return;
+
+	Matrix44 model = glass->root.model;
+
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(GL_FALSE);
+	glDisable(GL_BLEND);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+
+	shader->enable();
+	shader->setUniform("u_model", model);
+	shader->setUniform("u_viewprojection", camera->viewprojection_matrix);
+	shader->setUniform("u_camera_pos", camera->eye);
+	shader->setUniform("u_scene_texture", scene_texture, 0);
+	shader->setUniform("u_normalmap", glass_normal_texture ? glass_normal_texture : GFX::Texture::getWhiteTexture(), 1);
+	shader->setUniform("u_resolution", Vector2f((float)scene_texture->width, (float)scene_texture->height));
+	shader->setUniform("u_refraction_strength", glass->strength * glass_refraction_strength);
+	shader->setUniform("u_glass_tint", Vector3f(0.92f, 0.98f, 1.0f));
+	sphere.render(GL_TRIANGLES);
+	shader->disable();
+
+	glDepthMask(GL_TRUE);
+	glDisable(GL_BLEND);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
 }
 
 void Renderer::updateDeferredFBOs()
@@ -289,6 +432,21 @@ void Renderer::renderDeferred(Camera* camera)
 
 	renderTonemap();
 	gbuffer_fbo->depth_texture->copyTo(NULL);
+
+	if (glass_refraction_enabled && !glass_refractions.empty())
+	{
+		updateRefractionFBO();
+		blitScreenToRefractionFBO();
+
+		refraction_fbo->bind();
+		for (size_t i = 0; i < glass_refractions.size(); ++i)
+			renderGlassMask(camera, glass_refractions[i]);
+		refraction_fbo->unbind();
+		blitRefractionFBOToScreen();
+
+		for (size_t i = 0; i < glass_refractions.size(); ++i)
+			renderGlassRefraction(camera, glass_refractions[i], refraction_fbo->color_textures[0]);
+	}
 
 	for (size_t i = 0; i < render_calls.size(); ++i)
 	{
@@ -843,6 +1001,9 @@ void Renderer::showUI()
 	ImGui::Separator();
 	ImGui::Checkbox("Tonemap", &tonemap_enabled);
 	ImGui::DragFloat("Exposure", &tonemap_exposure, 0.05f, 0.01f, 10.0f);
+	ImGui::Separator();
+	ImGui::Checkbox("Glass Refraction", &glass_refraction_enabled);
+	ImGui::DragFloat("Refraction Strength", &glass_refraction_strength, 0.001f, 0.0f, 0.15f);
 }
 
 #else

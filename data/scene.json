@@ -90,6 +90,14 @@
 			"filename":	"prefabs/tree.glb",
 			"type":	"PREFAB"
 		}, {
+			"type":	"GLASS_REFRACTION",
+			"name":	"glass",
+			"layers":	3,
+			"position":	[0, 0.85000002384185791, 0],
+			"scale":	[0.75, 0.75, 0.75],
+			"rotation":	[0, 0, 0, 1],
+			"strength":	0.045000001788139343
+		}, {
 			"type":	"LIGHT",
 			"name":	"spot",
 			"layers":	3,

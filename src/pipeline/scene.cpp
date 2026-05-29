@@ -339,6 +339,32 @@ void SCN::UnknownEntity::serialize(cJSON* json)
 	}
 }
 
+SCN::GlassRefractionEntity::GlassRefractionEntity()
+{
+	name = "glass";
+	strength = 0.045f;
+}
+
+void SCN::GlassRefractionEntity::configure(cJSON* json)
+{
+	strength = readJSONNumber(json, "strength", strength);
+}
+
+void SCN::GlassRefractionEntity::serialize(cJSON* json)
+{
+	cJSON_AddStringToObject(json, "type", getTypeAsStr());
+	writeJSONNumber(json, "strength", strength);
+}
+
+bool SCN::GlassRefractionEntity::testRay(const Ray& ray, Vector3f& coll, float max_dist)
+{
+	float t = 0.0f;
+	Vector3f scale = root.model.getScale();
+	float radius = (scale.x + scale.y + scale.z) / 3.0f;
+	bool hit = RaySphereCollision(root.model.getTranslation(), radius, ray.origin, ray.direction, coll, t);
+	return hit && t <= max_dist;
+}
+
 SCN::RayTestResult SCN::Scene::testRay(Ray& ray, uint8 layers)
 {
 	RayTestResult result;

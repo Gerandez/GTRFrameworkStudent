@@ -30,6 +30,7 @@ namespace SCN {
 		TERRAIN = 5,
 		VOXEL = 6,
 		PARTICLE_SYSTEM = 7,
+		GLASS_REFRACTION = 9,
 		CHARACTER = 8,
 
 		REFLECTION_PROBE = 10,
@@ -121,6 +122,20 @@ namespace SCN {
 		virtual void configure(cJSON* json);
 		virtual void serialize(cJSON* json);
 		virtual const char* getTypeAsStr() { return original_type.c_str(); };
+	};
+
+	class GlassRefractionEntity : public SCN::BaseEntity
+	{
+	public:
+		float strength;
+
+		GlassRefractionEntity();
+
+		ENTITY_METHODS(GlassRefractionEntity, GLASS_REFRACTION, 8, 1);
+
+		virtual void configure(cJSON* json);
+		virtual void serialize(cJSON* json);
+		bool testRay(const Ray& ray, Vector3f& coll, float max_dist = 100000.0f);
 	};
 
 	//contains all entities of the scene

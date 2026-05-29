@@ -49,11 +49,15 @@ namespace SCN {
 		std::vector<float> ssao_samples;
 		bool tonemap_enabled;
 		float tonemap_exposure;
+		bool glass_refraction_enabled;
+		float glass_refraction_strength;
 
 		GFX::Texture* skybox_cubemap;
 		GFX::FBO* gbuffer_fbo;
 		GFX::FBO* lighting_fbo;
 		GFX::FBO* ssao_fbo;
+		GFX::FBO* refraction_fbo;
+		GFX::Texture* glass_normal_texture;
       // 3.1 + 3.5
         std::vector<GFX::FBO*> shadowmap_fbos;
       // 3.5: Data consumed by the shading pass
@@ -63,6 +67,7 @@ namespace SCN {
 		SCN::Scene* scene;
 		std::vector<RenderCall> render_calls;
 		std::vector<LightEntity*> enabled_lights;
+		std::vector<GlassRefractionEntity*> glass_refractions;
 
 		//updated every frame
 		Renderer(const char* shaders_atlas_filename );
@@ -94,10 +99,15 @@ namespace SCN {
 		void renderDeferredLightVolumes(Camera* camera);
 		void renderSSAO(Camera* camera);
 		void renderTonemap();
+		void renderGlassRefraction(Camera* camera, GlassRefractionEntity* glass, GFX::Texture* scene_texture);
+		void renderGlassMask(Camera* camera, GlassRefractionEntity* glass);
 		void generateSSAOSamples(bool hemisphere);
 		void sendLightUniforms(GFX::Shader* shader);
 		void sendShadowUniforms(GFX::Shader* shader, int first_slot = 3);
 		void updateDeferredFBOs();
+		void updateRefractionFBO();
+		void blitRefractionFBOToScreen();
+		void blitScreenToRefractionFBO();
 
 		void showUI();
 	};
