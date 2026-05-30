@@ -544,9 +544,12 @@ in vec2 v_uv;
 uniform vec3 u_camera_pos;
 uniform sampler2D u_scene_texture;
 uniform sampler2D u_normalmap;
+uniform samplerCube u_skybox;
 uniform vec2 u_resolution;
+uniform mat4 u_view;
 uniform float u_refraction_strength;
 uniform vec3 u_glass_tint;
+uniform bool u_has_skybox;
 
 out vec4 FragColor;
 
@@ -555,18 +558,32 @@ void main()
 	vec2 screen_uv = gl_FragCoord.xy / u_resolution;
 
 	vec4 vBumpTex = 2.0 * texture(u_normalmap, v_uv) - 1.0;
-	vec3 vBump = normalize(vBumpTex.xyz * vec3(0.2, 0.2, 1.0));
+	vec3 N = normalize(v_normal);
+	vec3 V = normalize(u_camera_pos - v_world_position);
+	vec3 view_normal = normalize((u_view * vec4(N, 0.0)).xyz);
+	vec3 vBump = normalize(vec3(view_normal.xy + vBumpTex.xy * 0.12, view_normal.z));
 
 	vec2 vProj = screen_uv;
-	vec2 bump_offset = vBump.xy * u_refraction_strength;
-	vec4 vRefrA = texture(u_scene_texture, clamp(vProj + bump_offset, 0.001, 0.999));
+	float LdotN = clamp(dot(N, V), 0.0, 1.0);
+	float fresnel = pow(1.0 - LdotN, 5.0);
+	vec2 bump_offset = vBump.xy * u_refraction_strength * (0.35 + fresnel * 0.75);
+	vec2 refr_uv = clamp(vProj + bump_offset, 0.001, 0.999);
+	vec4 vRefrA = vec4(
+		texture(u_scene_texture, clamp(vProj + bump_offset * 1.025, 0.001, 0.999)).r,
+		texture(u_scene_texture, refr_uv).g,
+		texture(u_scene_texture, clamp(vProj + bump_offset * 0.975, 0.001, 0.999)).b,
+		texture(u_scene_texture, refr_uv).a
+	);
 	vec4 vRefrB = texture(u_scene_texture, vProj);
 
-	vec4 vFinal = vRefrB * vRefrA.a + vRefrA * (1.0 - vRefrA.a);
+	vec4 vFinal = vRefrA;
 	vec4 vDiffuse = vec4(clamp(0.1 + u_glass_tint * 0.9, 0.0, 1.0), 1.0);
-	vec3 vEye = normalize(u_camera_pos - v_world_position);
-	float edge = pow(1.0 - clamp(dot(normalize(v_normal), vEye), 0.0, 1.0), 4.0);
-	FragColor = vec4((vDiffuse * vFinal).rgb + vec3(0.55, 0.75, 0.9) * edge * 0.18, 1.0);
+	vec3 reflect_dir = reflect(-V, N);
+	vec3 reflected = u_has_skybox ? texture(u_skybox, reflect_dir).rgb : vRefrB.rgb;
+	vec3 refracted = (vDiffuse * vFinal).rgb;
+	vec3 color = mix(refracted, reflected, clamp(0.05 + fresnel * 0.65, 0.0, 0.75));
+	color += vec3(0.55, 0.75, 0.9) * fresnel * 0.12;
+	FragColor = vec4(color, 1.0);
 }
 
 \glass_mask.fs

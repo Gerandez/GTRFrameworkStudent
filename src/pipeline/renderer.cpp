@@ -328,12 +328,16 @@ void Renderer::renderGlassRefraction(Camera* camera, GlassRefractionEntity* glas
 	shader->enable();
 	shader->setUniform("u_model", model);
 	shader->setUniform("u_viewprojection", camera->viewprojection_matrix);
+	shader->setUniform("u_view", camera->view_matrix);
 	shader->setUniform("u_camera_pos", camera->eye);
 	shader->setUniform("u_scene_texture", scene_texture, 0);
 	shader->setUniform("u_normalmap", glass_normal_texture ? glass_normal_texture : GFX::Texture::getWhiteTexture(), 1);
+	if (skybox_cubemap)
+		shader->setUniform("u_skybox", skybox_cubemap, 2);
 	shader->setUniform("u_resolution", Vector2f((float)scene_texture->width, (float)scene_texture->height));
 	shader->setUniform("u_refraction_strength", glass->strength * glass_refraction_strength);
 	shader->setUniform("u_glass_tint", Vector3f(0.92f, 0.98f, 1.0f));
+	shader->setUniform("u_has_skybox", skybox_cubemap != nullptr);
 	sphere.render(GL_TRIANGLES);
 	shader->disable();
 
